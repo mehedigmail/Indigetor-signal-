@@ -1,1 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#080d18">
+  <title>Mehedi AI Trading Agent</title>
+  <style>
+    :root {
+      --bg: #080d18;
+      --panel: #101827;
+      --panel2: #0c1422;
+      --line: #243248;
+      --text: #eef5ff;
+      --muted: #8ea0b9;
+      --green: #19e0ad;
+      --green2: #0b9f83;
+      --red: #ff5d78;
+      --yellow: #f8c45c;
+      --blue: #63a8ff;
+      --purple: #b78aff;
+      --radius: 18px;
+      --shadow: 0 16px 40px rgba(0,0,0,.22);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0; color: var(--text); background:
+        radial-gradient(ellipse at 12% 0%, rgba(28,96,122,.18), transparent 32%),
+        radial-gradient(ellipse at 100% 15%, rgba(28,69,119,.12), transparent 30%),
+        var(--bg);
+      font: 14px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    button, select { font: inherit; }
+    button, select, a { -webkit-tap-highlight-color: transparent; }
+    button { cursor: pointer; }
+    .app { max-width: 1440px; margin: 0 auto; min-height: 100vh; padding: 18px; }
+    .topbar { display:flex; align-items:center; justify-content:space-between; gap:16px; padding: 14px 18px; border:1px solid var(--line); background:rgba(13,21,35,.88); border-radius:20px; box-shadow:var(--shadow); }
+    .brand { display:flex; align-items:center; gap:12px; min-width:0; }
+    .logo { width:44px; height:44px; display:grid; place-items:center; flex-shrink:0; border-radius:14px; color:#061711; background:linear-gradient(135deg,var(--green),#76f5d5); font-size:24px; font-weight:900; box-shadow:0 0 24px rgba(25,224,173,.18); }
+    .brand h1 { margin:0; font-size:clamp(16px,2.2vw,22px); letter-spacing:-.5px; line-height:1.2; }
+    .brand p { margin:4px 0 0; color:var(--muted); font-size:12px; }
+    .top-right { display:flex; align-items:center; gap:12px; }
+    .status-pill { display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border:1px solid rgba(25,224,173,.25); border-radius:999px; color:var(--green); background:rgba(25,224,173,.07); white-space:nowrap; font-size:12px; }
+    .dot { width:8px; height:8px; background:currentColor; border-radius:50%; box-shadow:0 0 10px currentColor; }
+    .clock { text-align:right; color:var(--muted); font-size:12px; min-width:100px; }
+    .layout { display:grid; grid-template-columns:210px minmax(0,1fr); gap:18px; margin-top:18px; }
+    .sidebar { border:1px solid var(--line); border-radius:var(--radius); padding:14px; background:rgba(13,21,35,.72); display:flex; flex-direction:column; gap:8px; }
+    .side-label { color:#62748e; font-size:10px; font-weight:800; letter-spacing:1.6px; padding:10px 10px 4px; }
+    .nav-btn { border:1px solid transparent; color:#aab8cb; background:transparent; padding:12px; text-align:left; border-radius:12px; display:flex; align-items:center; gap:11px; }
+    .nav-btn .nav-icon { width:20px; text-align:center; font-size:17px; }
+    .nav-btn.active, .nav-btn:hover { color:var(--green); background:rgba(25,224,173,.09); border-color:rgba(25,224,173,.18); }
+    .side-bottom { margin-top:auto; border:1px solid var(--line); border-radius:14px; padding:13px; background:linear-gradient(145deg,rgba(25,224,173,.08),transparent); }
+    .side-bottom strong { display:block; color:var(--green); font-size:17px; }
+    .side-bottom span { color:var(--muted); font-size:11px; }
+    main { min-width:0; }
+    .page-head { display:flex; justify-content:space-between; align-items:flex-end; gap:12px; margin:2px 2px 16px; }
+    .eyebrow { color:var(--green); text-transform:uppercase; font-weight:800; letter-spacing:1.7px; font-size:10px; }
+    .page-head h2 { margin:5px 0 0; font-size:clamp(22px,3vw,30px); letter-spacing:-.8px; }
+    .page-head p { color:var(--muted); margin:4px 0 0; }
+    .toolbar { display:flex; flex-wrap:wrap; gap:8px; }
+    select, .ghost-btn { background:#111d2e; color:var(--text); border:1px solid #2a3a51; border-radius:11px; padding:10px 12px; outline:none; }
+    select:focus, button:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
+    .btn { border:0; border-radius:11px; padding:11px 15px; font-weight:800; color:#061711; background:linear-gradient(135deg,var(--green),#8af7d8); box-shadow:0 7px 20px rgba(25,224,173,.13); }
+    .btn:disabled { opacity:.6; cursor:wait; }
+    .metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:14px; }
+    .metric, .panel { border:1px solid var(--line); background:linear-gradient(145deg,rgba(17,27,44,.98),rgba(11,19,32,.98)); border-radius:var(--radius); box-shadow:var(--shadow); }
+    .metric { padding:16px; min-width:0; position:relative; overflow:hidden; }
+    .metric:after { content:""; position:absolute; width:80px; height:80px; right:-28px; top:-32px; border-radius:50%; background:rgba(25,224,173,.06); }
+    .metric-top { display:flex; align-items:center; justify-content:space-between; color:var(--muted); gap:8px; font-size:12px; }
+    .metric-icon { display:grid; place-items:center; width:29px; height:29px; border-radius:9px; color:var(--green); background:rgba(25,224,173,.1); }
+    .metric-value { margin-top:11px; font-size:clamp(19px,2.3vw,26px); font-weight:800; letter-spacing:-.5px; overflow-wrap:anywhere; }
+    .metric-sub { margin-top:4px; color:var(--muted); font-size:11px; }
+    .main-grid { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(285px,.85fr); gap:14px; align-items:start; }
+    .left-stack, .right-stack { display:grid; gap:14px; min-width:0; }
+    .panel { padding:17px; min-width:0; }
+    .panel-head { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:14px; }
+    .panel-head h3 { margin:0; font-size:15px; }
+    .panel-head p { margin:3px 0 0; color:var(--muted); font-size:11px; }
+    .live-label { color:var(--green); font-size:11px; white-space:nowrap; }
+    .chart-top { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+    .symbol-title { font-size:17px; font-weight:800; }
+    .symbol-title small { color:var(--muted); font-weight:500; }
+    .tf-tabs { display:flex; gap:4px; padding:4px; background:#09111e; border:1px solid #26364d; border-radius:12px; }
+    .tf-btn { border:0; border-radius:8px; background:transparent; color:var(--muted); padding:7px 10px; font-size:11px; }
+    .tf-btn.active { background:rgba(25,224,173,.14); color:var(--green); }
+    .chart-legend { display:flex; gap:14px; flex-wrap:wrap; margin-bottom:9px; color:var(--muted); font-size:11px; }
+    .legend-dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:5px; }
+    .chart-box { min-height:225px; border:1px solid #1e2c41; border-radius:13px; background:linear-gradient(180deg,rgba(5,12,23,.6),rgba(9,18,31,.45)); display:flex; align-items:center; justify-content:center; text-align:center; padding:24px; }
+    .chart-placeholder-icon { font-size:34px; opacity:.75; }
+    .chart-placeholder h4 { margin:8px 0 4px; font-size:14px; }
+    .chart-placeholder p { color:var(--muted); max-width:340px; margin:0 auto; font-size:12px; }
+    .chart-note { display:flex; align-items:center; justify-content:space-between; gap:10px; color:var(--muted); font-size:11px; margin-top:10px; }
+    .signal-panel { border-color:rgba(25,224,173,.27); background:radial-gradient(ellipse at 100% 0%,rgba(25,224,173,.1),transparent 48%),linear-gradient(145deg,#0e2227,#0b1723); }
+    .signal-main { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:2px 0 16px; border-bottom:1px solid rgba(25,224,173,.16); }
+    .signal-state { display:flex; align-items:center; gap:10px; }
+    .signal-symbol { width:43px; height:43px; display:grid; place-items:center; border-radius:14px; background:rgba(142,160,185,.12); color:var(--muted); font-size:21px; }
+    .signal-state h3 { margin:0; font-size:26px; letter-spacing:-.5px; }
+    .signal-state p { margin:2px 0 0; color:var(--muted); font-size:11px; }
+    .signal-score { text-align:right; }
+    .signal-score strong { display:block; font-size:23px; }
+    .signal-score span { color:var(--muted); font-size:11px; }
+    .signal-details { display:grid; gap:9px; margin:15px 0; }
+    .detail-row { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; font-size:12px; }
+    .detail-row span:first-child { color:#9aabc1; }
+    .detail-row strong { text-align:right; font-weight:650; overflow-wrap:anywhere; }
+    .positive { color:var(--green)!important; }
+    .negative { color:var(--red)!important; }
+    .neutral { color:var(--yellow)!important; }
+    .reason-box { padding:13px; border:1px solid rgba(25,224,173,.18); background:rgba(4,14,22,.35); border-radius:13px; }
+    .reason-title { display:flex; gap:8px; align-items:center; font-weight:800; color:var(--green); margin-bottom:7px; }
+    .reason-box p { margin:0; color:#c2d0df; font-size:12px; line-height:1.65; overflow-wrap:anywhere; }
+    .score-note { margin-top:10px; color:var(--muted); font-size:10px; }
+    .two-panels { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    .indicator-list, .strategy-list { display:grid; gap:12px; }
+    .indicator-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:8px; align-items:center; font-size:12px; }
+    .indicator-row span:first-child { color:#b8c6d8; }
+    .indicator-row strong { font-weight:650; }
+    .tag { border-radius:999px; padding:3px 7px; font-size:10px; white-space:nowrap; color:var(--muted); background:rgba(142,160,185,.1); }
+    .tag.good { color:var(--green); background:rgba(25,224,173,.1); }
+    .tag.bad { color:var(--red); background:rgba(255,93,120,.1); }
+    .strategy-row { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12px; }
+    .strategy-row span:first-child { color:#b8c6d8; }
+    .strategy-state { display:flex; align-items:center; gap:6px; color:var(--muted); white-space:nowrap; font-size:11px; }
+    .mini-dot { width:6px; height:6px; border-radius:50%; background:currentColor; }
+    .overview-text { color:#c1cede; font-size:12px; line-height:1.7; margin:0 0 14px; }
+    .bar-row { display:grid; grid-template-columns:65px minmax(0,1fr) 35px; gap:8px; align-items:center; margin-top:12px; color:var(--muted); font-size:11px; }
+    .bar { height:7px; border-radius:99px; background:#1c2a3d; overflow:hidden; }
+    .bar span { display:block; height:100%; width:0%; border-radius:inherit; background:linear-gradient(90deg,var(--green2),var(--green)); transition:width .3s; }
+    .history-panel { margin-top:14px; }
+    .history-empty { color:var(--muted); text-align:center; padding:18px 8px; font-size:12px; }
+    .history-list { display:grid; gap:8px; }
+    .history-item { display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:12px; padding:11px 12px; background:rgba(6,14,25,.5); border:1px solid #202e43; border-radius:11px; font-size:12px; }
+    .history-item small { display:block; color:var(--muted); margin-top:3px; }
+    .history-signal { font-weight:800; }
+    .footer { display:flex; flex-wrap:wrap; justify-content:space-between; gap:10px; padding:16px 4px 6px; color:#647790; font-size:11px; }
+    .footer strong { color:#9eb0c6; }
+    .toast { display:none; position:fixed; z-index:10; left:50%; bottom:22px; transform:translateX(-50%); width:min(92%,450px); border:1px solid var(--line); border-radius:13px; padding:13px 15px; background:#152236; box-shadow:var(--shadow); font-size:12px; }
+    .toast.show { display:block; }
+    .loading { display:inline-block; width:12px; height:12px; border:2px solid rgba(5,20,15,.25); border-top-color:#061711; border-radius:50%; animation:spin .7s linear infinite; vertical-align:-2px; margin-right:6px; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    /* App-style navigation: switch screens instead of scrolling through one long page. */
+    main[data-view="dashboard"] #analysis,
+    main[data-view="dashboard"] .two-panels,
+    main[data-view="dashboard"] #history,
+    main[data-view="dashboard"] #settings { display:none !important; }
+    main[data-view="analysis"] .page-head,
+    main[data-view="analysis"] .metrics,
+    main[data-view="analysis"] #history,
+    main[data-view="analysis"] #settings,
+    main[data-view="analysis"] .right-stack { display:none !important; }
+    main[data-view="history"] .page-head,
+    main[data-view="history"] .metrics,
+    main[data-view="history"] .main-grid,
+    main[data-view="history"] #settings { display:none !important; }
+    main[data-view="settings"] .page-head,
+    main[data-view="settings"] .metrics,
+    main[data-view="settings"] .main-grid,
+    main[data-view="settings"] #history { display:none !important; }
+    main[data-view="history"] #history,
+    main[data-view="settings"] #settings { display:block !important; }
+    main[data-view="analysis"] .main-grid { display:block; }
+    main[data-view="analysis"] .left-stack { display:grid; }
+    main[data-view="analysis"] #analysis { display:block !important; }
+    main[data-view="analysis"] .two-panels { display:grid !important; margin-top:14px; }
+    .view-heading { display:none; align-items:center; justify-content:space-between; gap:10px; margin:0 0 12px; padding:12px 14px; border:1px solid var(--line); border-radius:14px; background:var(--panel); }
+    .view-heading strong { font-size:15px; }
+    main[data-view="history"] .view-heading,
+    main[data-view="settings"] .view-heading,
+    main[data-view="analysis"] .view-heading { display:flex; }
+    .view-heading span { color:var(--muted); font-size:11px; }
+    @media (max-width:760px) {
+      .app { padding:8px; }
+      .layout { display:flex; flex-direction:column; }
+      .sidebar { position:sticky; top:4px; z-index:5; display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:4px; padding:5px; backdrop-filter:blur(14px); background:rgba(13,21,35,.95); }
+      .nav-btn { flex-direction:column; justify-content:center; gap:2px; padding:7px 2px; font-size:10px; }
+      .nav-btn .nav-icon { font-size:16px; }
+      main[data-view="dashboard"] .metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      main[data-view="dashboard"] .metric { padding:10px; }
+      main[data-view="dashboard"] .metric-value { font-size:19px; }
+      main[data-view="dashboard"] .signal-panel { padding:12px; }
+      main[data-view="dashboard"] .right-stack { gap:10px; }
+      main[data-view="dashboard"] .signal-details { grid-template-columns:1fr 1fr; column-gap:14px; }
+      main[data-view="dashboard"] .detail-row { font-size:11px; }
+      main[data-view="dashboard"] .reason-box { padding:10px; }
+      main[data-view="dashboard"] .overview-text { margin-bottom:8px; }
+      main[data-view="analysis"] .chart-box { min-height:150px; }
+      main[data-view="analysis"] .two-panels { grid-template-columns:1fr; }
+      main[data-view="history"] #history, main[data-view="settings"] #settings { margin-top:0 !important; }
+      .footer { padding-top:12px; }
+    }
+    @media (max-width:1050px) {
+      .layout { grid-template-columns:1fr; }
+      .sidebar { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:6px; }
+      .side-label, .side-bottom { display:none; }
+      .nav-btn { justify-content:center; padding:10px 7px; font-size:12px; }
+      .nav-btn .nav-icon { width:auto; }
+      .main-grid { grid-template-columns:minmax(0,1.2fr) minmax(270px,.8fr); }
+    }
+    @media (max-width:760px) {
+      .app { padding:10px; }
+      .topbar { padding:12px; border-radius:16px; }
+      .clock { display:none; }
+      .brand p { font-size:10px; }
+      .status-pill { padding:7px 9px; font-size:10px; }
+      .layout { gap:12px; margin-top:12px; }
+      .sidebar { grid-template-columns:repeat(4,minmax(0,1fr)); padding:7px; }
+      .nav-btn { flex-direction:column; gap:3px; font-size:10px; padding:8px 3px; }
+      .nav-btn .nav-icon { font-size:16px; }
+      .page-head { display:block; }
+      .toolbar { margin-top:12px; }
+      .toolbar select { flex:1; min-width:0; }
+      .toolbar .btn { flex:1; }
+      .metrics { grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
+      .metric { padding:13px; border-radius:15px; }
+      .metric-value { font-size:21px; }
+      .main-grid, .two-panels { grid-template-columns:1fr; }
+      .panel { padding:14px; border-radius:16px; }
+      .right-stack { order:-1; }
+      .chart-box { min-height:190px; padding:18px; }
+      .chart-note { align-items:flex-start; flex-direction:column; }
+      .signal-state h3 { font-size:24px; }
+      .history-item { grid-template-columns:minmax(0,1fr) auto; }
+      .history-item .history-score { display:none; }
+    }
+    @media (max-width:380px) {
+      .app { padding:7px; }
+      .brand { gap:8px; }
+      .logo { width:36px; height:36px; font-size:20px; }
+      .brand h1 { font-size:14px; }
+      .top-right { gap:4px; }
+      .status-pill { padding:6px 7px; }
+      .tf-btn { padding:7px 8px; }
+      .indicator-row { grid-template-columns:minmax(0,1fr) auto; }
+      .indicator-row .tag { grid-column:2; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo" aria-hidden="true">M</div>
+        <div>
+          <h1>Mehedi AI Trading Agent</h1>
+          <p>Market analysis • Clear signals • Risk-aware decisions</p>
+        </div>
+      </div>
+      <div class="top-right">
+        <div id="connectionPill" class="status-pill"><span class="dot"></span><span id="connectionText">Checking backend</span></div>
+        <div class="clock"><div id="localDate">—</div><div id="localTime">—</div></div>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar" aria-label="Main navigation">
+        <div class="side-label">WORKSPACE</div>
+        <button class="nav-btn active" data-target="dashboard"><span class="nav-icon">⌂</span>Dashboard</button>
+        <button class="nav-btn" data-target="analysis"><span class="nav-icon">⌁</span>Analysis</button>
+        <button class="nav-btn" data-target="history"><span class="nav-icon">◷</span>History</button>
+        <button class="nav-btn" data-target="settings"><span class="nav-icon">⚙</span>Settings</button>
+        <div class="side-bottom"><strong>MEHEDI / AI</strong><span>Analysis assistance, not a guarantee.</span></div>
+      </aside>
+
+      <main id="dashboard" data-view="dashboard">
+        <div class="view-heading"><strong id="viewTitle">Dashboard</strong><span>Mehedi AI</span></div>
+        <section class="page-head">
+          <div>
+            <div class="eyebrow">Trading intelligence workspace</div>
+            <h2>Market Dashboard</h2>
+            <p>Review market data and technical analysis in one place.</p>
+          </div>
+          <div class="toolbar">
+            <select id="symbolSelect" aria-label="Currency pair">
+              <option value="EUR/USD">EUR/USD</option>
+              <option value="GBP/USD">GBP/USD</option>
+              <option value="USD/JPY">USD/JPY</option>
+              <option value="AUD/USD">AUD/USD</option>
+              <option value="USD/CAD">USD/CAD</option>
+              <option value="EUR/GBP">EUR/GBP</option>
+              <option value="USD/CHF">USD/CHF</option>
+            </select>
+            <select id="timeframeSelect" aria-label="Timeframe">
+              <option value="1min">1 Minute</option>
+              <option value="5min">5 Minutes</option>
+              <option value="15min">15 Minutes</option>
+            </select>
+            <button id="analyzeBtn" class="btn"><span id="analyzeBtnText">Analyze Market</span></button>
+          </div>
+        </section>
+
+        <section class="metrics" aria-label="Market metrics">
+          <article class="metric"><div class="metric-top"><span>Market Price</span><span class="metric-icon">⌁</span></div><div id="metricPrice" class="metric-value">—</div><div id="priceSub" class="metric-sub">Waiting for backend data</div></article>
+          <article class="metric"><div class="metric-top"><span>Market Trend</span><span class="metric-icon">↗</span></div><div id="metricTrend" class="metric-value">—</div><div class="metric-sub">Based on latest analysis</div></article>
+          <article class="metric"><div class="metric-top"><span>Analysis Score</span><span class="metric-icon">◎</span></div><div id="metricScore" class="metric-value">—</div><div class="metric-sub">Not a win probability</div></article>
+          <article class="metric"><div class="metric-top"><span>Last Analysis</span><span class="metric-icon">◷</span></div><div id="metricUpdated" class="metric-value" style="font-size:18px">—</div><div class="metric-sub">Backend timestamp</div></article>
+        </section>
+
+        <div class="main-grid">
+          <div class="left-stack">
+            <section class="panel" id="analysis">
+              <div class="chart-top">
+                <div><div class="symbol-title" id="chartSymbol">EUR/USD <small>• 1 Minute</small></div><div class="live-label" style="margin-top:5px">● Backend data status: <span id="dataStatus">Waiting</span></div></div>
+                <div class="tf-tabs" aria-label="Quick timeframe">
+                  <button class="tf-btn active" data-tf="1min">1m</button><button class="tf-btn" data-tf="5min">5m</button><button class="tf-btn" data-tf="15min">15m</button>
+                </div>
+              </div>
+              <div class="chart-legend"><span><i class="legend-dot" style="background:#19e0ad"></i>Price data</span><span><i class="legend-dot" style="background:#63a8ff"></i>EMA trend</span><span><i class="legend-dot" style="background:#b78aff"></i>MACD trend</span></div>
+              <div class="chart-box"><div class="chart-placeholder"><div class="chart-placeholder-icon">⌁</div><h4 id="chartMessage">Chart data not supplied by backend</h4><p>This dashboard will not draw invented candles. A real chart needs OHLC candle data from an API endpoint.</p></div></div>
+              <div class="chart-note"><span>Market chart: <strong id="chartDataStatus">Not connected</strong></span><span>Signals use backend analysis only</span></div>
+            </section>
+
+            <div class="two-panels">
+              <section class="panel">
+                <div class="panel-head"><div><h3>Technical Indicators</h3><p>Values supplied by backend</p></div><span class="metric-icon">⌘</span></div>
+                <div class="indicator-list">
+                  <div class="indicator-row"><span>RSI (14)</span><strong id="rsiValue">—</strong><span id="rsiTag" class="tag">Waiting</span></div>
+                  <div class="indicator-row"><span>EMA Trend</span><strong id="emaValue">—</strong><span id="emaTag" class="tag">Waiting</span></div>
+                  <div class="indicator-row"><span>MACD Trend</span><strong id="macdValue">—</strong><span id="macdTag" class="tag">Waiting</span></div>
+                  <div class="indicator-row"><span>RSI Status</span><strong id="rsiStatus">—</strong><span class="tag">Backend</span></div>
+                  <div class="indicator-row"><span>Candle Time</span><strong id="candleTime">—</strong><span class="tag">UTC/API</span></div>
+                </div>
+              </section>
+              <section class="panel">
+                <div class="panel-head"><div><h3>Strategy Summary</h3><p>Only fields returned by backend</p></div><span class="metric-icon">◈</span></div>
+                <div class="strategy-list">
+                  <div class="strategy-row"><span>Overall Trend</span><span id="strategyTrend" class="strategy-state">—</span></div>
+                  <div class="strategy-row"><span>Momentum</span><span id="strategyMomentum" class="strategy-state">—</span></div>
+                  <div class="strategy-row"><span>Signal Status</span><span id="strategySignal" class="strategy-state">Waiting</span></div>
+                  <div class="strategy-row"><span>Data Integrity</span><span id="strategyData" class="strategy-state">Unverified</span></div>
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <div class="right-stack">
+            <section class="panel signal-panel">
+              <div class="panel-head"><div><h3>AI / Rule-Based Signal</h3><p id="signalPair">EUR/USD • 1 Minute</p></div><span class="status-pill" style="font-size:10px">LIVE API</span></div>
+              <div class="signal-main">
+                <div class="signal-state"><div id="signalIcon" class="signal-symbol">—</div><div><h3 id="signalValue">WAIT</h3><p id="signalCaption">Awaiting real analysis</p></div></div>
+                <div class="signal-score"><strong id="signalScore">—</strong><span>Analysis score</span></div>
+              </div>
+              <div class="signal-details">
+                <div class="detail-row"><span>Symbol</span><strong id="detailSymbol">EUR/USD</strong></div>
+                <div class="detail-row"><span>Price</span><strong id="detailPrice">—</strong></div>
+                <div class="detail-row"><span>Trend</span><strong id="detailTrend">—</strong></div>
+                <div class="detail-row"><span>RSI</span><strong id="detailRsi">—</strong></div>
+                <div class="detail-row"><span>EMA Trend</span><strong id="detailEma">—</strong></div>
+                <div class="detail-row"><span>MACD Trend</span><strong id="detailMacd">—</strong></div>
+                <div class="detail-row"><span>Analyzed At</span><strong id="detailTime">—</strong></div>
+              </div>
+              <div class="reason-box"><div class="reason-title">◉ Analysis Reason</div><p id="reasonText">No analysis has been received. Press Analyze Market to request current backend data.</p></div>
+              <div class="score-note">The analysis score is not a verified win rate, guarantee, or probability of profit. Confirm prices on your trading platform.</div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head"><div><h3>Market Overview</h3><p>Based on available backend fields</p></div></div>
+              <p class="overview-text" id="overviewText">Waiting for a successful analysis. No trend or market-strength values will be invented.</p>
+              <div class="bar-row"><span>Trend data</span><div class="bar"><span id="trendBar"></span></div><strong id="trendBarLabel">—</strong></div>
+              <div class="bar-row"><span>Momentum</span><div class="bar"><span id="momentumBar"></span></div><strong id="momentumBarLabel">—</strong></div>
+              <div class="bar-row"><span>Confidence</span><div class="bar"><span id="scoreBar"></span></div><strong id="scoreBarLabel">—</strong></div>
+              <p class="score-note">Bars show only the backend's analysis score where available; missing values remain blank.</p>
+            </section>
+          </div>
+        </div>
+
+        <section class="panel history-panel" id="history">
+          <div class="panel-head"><div><h3>Signal History</h3><p>Signals received in this browser session</p></div><button id="clearHistoryBtn" class="ghost-btn">Clear History</button></div>
+          <div id="historyList" class="history-empty">No analysis history yet.</div>
+        </section>
+
+        <section class="panel" id="settings" style="margin-top:14px">
+          <div class="panel-head"><div><h3>Connection Settings</h3><p>Backend URL used by this dashboard</p></div></div>
+          <div class="detail-row" style="align-items:center; flex-wrap:wrap"><span>Render backend</span><strong id="backendUrl" style="word-break:break-all">https://personal-ai-agent-42j6.onrender.com</strong></div>
+          <p class="score-note">Keep API keys on the server. Never place Twelve Data, Groq, Gemini, or other secret keys inside this HTML file.</p>
+          <button id="healthBtn" class="ghost-btn">Check Backend Health</button>
+        </section>
+
+        <footer class="footer"><span><strong>Mehedi AI Trading Agent</strong> • Technical analysis dashboard</span><span>Signals are estimates, not guaranteed predictions. This page does not place trades.</span></footer>
+      </main>
+    </div>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    // Change this URL only if your active Render service is different.
+    const API_BASE = "https://personal-ai-agent-42j6.onrender.com";
+    const $ = (id) => document.getElementById(id);
+    const state = { lastResult: null, history: [], busy: false };
+
+    function showToast(message) {
+      const toast = $("toast");
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => toast.classList.remove("show"), 4200);
+    }
+    function setConnection(ok, message) {
+      $("connectionText").textContent = message;
+      const pill = $("connectionPill");
+      pill.style.color = ok ? "var(--green)" : "var(--yellow)";
+      pill.style.borderColor = ok ? "rgba(25,224,173,.25)" : "rgba(248,196,92,.3)";
+      pill.style.background = ok ? "rgba(25,224,173,.07)" : "rgba(248,196,92,.07)";
+    }
+    function fmt(value, digits = 5) {
+      if (value === null || value === undefined || value === "" || !Number.isFinite(Number(value))) return "—";
+      return Number(value).toLocaleString("en-US", { maximumFractionDigits: digits });
+    }
+    function text(value, fallback = "—") {
+      if (value === null || value === undefined || value === "") return fallback;
+      return String(value);
+    }
+    function normalizeSignal(value) {
+      const s = String(value || "").trim().toUpperCase();
+      if (s === "BUY" || s === "SELL" || s === "WAIT") return s;
+      return "WAIT";
+    }
+    function setTag(id, value) {
+      const el = $(id);
+      el.textContent = value;
+      el.className = "tag";
+      const v = String(value || "").toLowerCase();
+      if (v.includes("bull") || v.includes("positive") || v.includes("oversold")) el.classList.add("good");
+      else if (v.includes("bear") || v.includes("negative") || v.includes("overbought")) el.classList.add("bad");
+    }
+    function setStateText(id, value) {
+      const el = $(id);
+      el.textContent = value;
+      el.className = "strategy-state";
+      const v = String(value).toLowerCase();
+      if (v.includes("bull") || v.includes("buy") || v.includes("positive") || v.includes("connected")) el.classList.add("positive");
+      else if (v.includes("bear") || v.includes("sell") || v.includes("negative") || v.includes("error")) el.classList.add("negative");
+      else if (v.includes("wait") || v.includes("unknown") || v.includes("not")) el.classList.add("neutral");
+    }
+    function updateClock() {
+      const now = new Date();
+      $("localDate").textContent = now.toLocaleDateString("en-US", {year:"numeric", month:"short", day:"numeric"});
+      $("localTime").textContent = now.toLocaleTimeString("en-US", {hour:"2-digit", minute:"2-digit", second:"2-digit"});
+    }
+    function selectedTimeframeLabel() {
+      const val = $("timeframeSelect").value;
+      return val === "1min" ? "1 Minute" : val === "5min" ? "5 Minutes" : "15 Minutes";
+    }
+    function updateSelectedLabels() {
+      const symbol = $("symbolSelect").value;
+      $("chartSymbol").innerHTML = "";
+      $("chartSymbol").append(document.createTextNode(symbol + " "));
+      const small = document.createElement("small");
+      small.textContent = "• " + selectedTimeframeLabel();
+      $("chartSymbol").append(small);
+      $("signalPair").textContent = symbol + " • " + selectedTimeframeLabel();
+      $("detailSymbol").textContent = symbol;
+    }
+    async function fetchJson(url, timeoutMs = 25000) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(url, { method:"GET", headers:{ "Accept":"application/json" }, signal:controller.signal });
+        const raw = await response.text();
+        let data;
+        try { data = raw ? JSON.parse(raw) : {}; } catch { throw new Error("Backend returned a non-JSON response (HTTP " + response.status + ")."); }
+        if (!response.ok) throw new Error(text(data.error || data.message, "HTTP " + response.status));
+        return data;
+      } finally { clearTimeout(timer); }
+    }
+    async function checkHealth(showMessage = false) {
+      try {
+        const data = await fetchJson(API_BASE + "/api/health", 18000);
+        const healthy = data && (data.status === "ok" || data.ok === true);
+        setConnection(!!healthy, healthy ? "Backend connected" : "Backend responded");
+        if (healthy) {
+          $("dataStatus").textContent = "Connected";
+          $("chartDataStatus").textContent = "Connected; candle endpoint not provided";
+          $("strategyData").textContent = "Backend reachable";
+          if (showMessage) showToast("Backend is reachable. Run an analysis to load current values.");
+        } else {
+          $("dataStatus").textContent = "Check response";
+          if (showMessage) showToast("Backend responded, but its health status is not marked OK.");
+        }
+        return data;
+      } catch (err) {
+        setConnection(false, "Backend offline");
+        $("dataStatus").textContent = "Unavailable";
+        $("chartDataStatus").textContent = "Unavailable";
+        $("strategyData").textContent = "Connection error";
+        if (showMessage) showToast("Could not reach backend: " + err.message);
+        return null;
+      }
+    }
+    function clearDisplayForRequest() {
+      $("metricPrice").textContent = "—";
+      $("metricTrend").textContent = "—";
+      $("metricScore").textContent = "—";
+      $("metricUpdated").textContent = "—";
+      $("priceSub").textContent = "Waiting for analysis response";
+      $("signalValue").textContent = "WAIT";
+      $("signalValue").className = "neutral";
+      $("signalCaption").textContent = "Analysis in progress";
+      $("signalIcon").textContent = "…";
+      $("signalScore").textContent = "—";
+      $("detailPrice").textContent = "—";
+      $("detailTrend").textContent = "—";
+      $("detailRsi").textContent = "—";
+      $("detailEma").textContent = "—";
+      $("detailMacd").textContent = "—";
+      $("detailTime").textContent = "—";
+      $("rsiValue").textContent = "—";
+      $("emaValue").textContent = "—";
+      $("macdValue").textContent = "—";
+      $("rsiStatus").textContent = "—";
+      $("candleTime").textContent = "—";
+      setTag("rsiTag","Waiting"); setTag("emaTag","Waiting"); setTag("macdTag","Waiting");
+      setStateText("strategyTrend","Waiting"); setStateText("strategyMomentum","Waiting"); setStateText("strategySignal","Waiting");
+      $("reasonText").textContent = "Waiting for a real response from the backend.";
+      $("overviewText").textContent = "Analysis in progress. No trend or market-strength values are being invented.";
+      ["trendBar","momentumBar","scoreBar"].forEach(id => $(id).style.width = "0%");
+      ["trendBarLabel","momentumBarLabel","scoreBarLabel"].forEach(id => $(id).textContent = "—");
+    }
+    function getField(data, keys) {
+      for (const key of keys) {
+        const parts = key.split(".");
+        let v = data;
+        for (const part of parts) v = v && v[part];
+        if (v !== undefined && v !== null && v !== "") return v;
+      }
+      return null;
+    }
+    function formatTimestamp(value) {
+      if (!value) return "—";
+      const d = new Date(value);
+      return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString("en-US", {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit", second:"2-digit"});
+    }
+    function renderAnalysis(data) {
+      // Support the existing server.js response shape and a nested {analysis:{...}} shape.
+      const root = data && data.analysis && typeof data.analysis === "object" ? {...data.analysis, ...data} : data;
+      const signalRaw = getField(root, ["signal","recommendation","action","analysis.signal"]);
+      const signal = normalizeSignal(signalRaw);
+      const hasRealSignal = signalRaw !== null && ["BUY","SELL","WAIT"].includes(String(signalRaw).trim().toUpperCase());
+      const price = getField(root, ["price","close","lastPrice","quote.price","data.price"]);
+      const trend = getField(root, ["trend","marketTrend","analysis.trend"]);
+      const rsi = getField(root, ["rsi","indicators.rsi","analysis.rsi"]);
+      const ema = getField(root, ["emaTrend","ema_trend","indicators.emaTrend"]);
+      const macd = getField(root, ["macdTrend","macd_trend","indicators.macdTrend"]);
+      const rsiStatusValue = getField(root, ["rsiStatus","rsi_status"]);
+      const score = getField(root, ["confidence","analysisScore","score"]);
+      const reason = getField(root, ["reason","message","analysis.reason"]);
+      const candleTimeValue = getField(root, ["candleTime","candle_time","datetime"]);
+      const analyzedAtValue = getField(root, ["analyzedAt","analysisTime","timestamp"]);
+      const symbol = text(getField(root, ["symbol","pair"]), $("symbolSelect").value);
+      const error = getField(root, ["error"]);
+      if (error) throw new Error(String(error));
+      // If response doesn't contain a recognized signal field, fail closed.
+      const safeSignal = hasRealSignal ? signal : "WAIT";
+      $("metricPrice").textContent = price === null ? "—" : fmt(price, 6);
+      $("priceSub").textContent = price === null ? "Price not supplied by backend" : "Backend market value";
+      $("metricTrend").textContent = text(trend);
+      $("metricTrend").className = "metric-value " + (String(trend).toLowerCase().includes("bull") ? "positive" : String(trend).toLowerCase().includes("bear") ? "negative" : "");
+      $("metricScore").textContent = score === null ? "—" : (fmt(score, 1) + (String(score).includes("%") ? "" : "%"));
+      $("metricUpdated").textContent = analyzedAtValue ? formatTimestamp(analyzedAtValue) : "—";
+      $("signalValue").textContent = safeSignal;
+      $("signalValue").className = safeSignal === "BUY" ? "positive" : safeSignal === "SELL" ? "negative" : "neutral";
+      $("signalCaption").textContent = hasRealSignal ? "Returned by backend" : "No valid signal in response";
+      $("signalIcon").textContent = safeSignal === "BUY" ? "↗" : safeSignal === "SELL" ? "↘" : "Ⅱ";
+      $("signalScore").textContent = score === null ? "—" : (fmt(score, 1) + (String(score).includes("%") ? "" : "%"));
+      $("detailSymbol").textContent = symbol;
+      $("detailPrice").textContent = price === null ? "—" : fmt(price, 6);
+      $("detailTrend").textContent = text(trend);
+      $("detailRsi").textContent = rsi === null ? "—" : fmt(rsi, 2);
+      $("detailEma").textContent = text(ema);
+      $("detailMacd").textContent = text(macd);
+      $("detailTime").textContent = analyzedAtValue ? formatTimestamp(analyzedAtValue) : "—";
+      $("rsiValue").textContent = rsi === null ? "—" : fmt(rsi, 2);
+      $("emaValue").textContent = text(ema);
+      $("macdValue").textContent = text(macd);
+      $("rsiStatus").textContent = text(rsiStatusValue);
+      $("candleTime").textContent = candleTimeValue ? formatTimestamp(candleTimeValue) : "—";
+      setTag("rsiTag", rsiStatusValue === null ? "Unavailable" : String(rsiStatusValue));
+      setTag("emaTag", ema === null ? "Unavailable" : String(ema));
+      setTag("macdTag", macd === null ? "Unavailable" : String(macd));
+      setStateText("strategyTrend", text(trend, "Unknown"));
+      setStateText("strategyMomentum", macd === null && rsi === null ? "Unavailable" : [rsi !== null ? "RSI " + fmt(rsi,1) : "", macd !== null ? "MACD " + macd : ""].filter(Boolean).join(" • "));
+      setStateText("strategySignal", safeSignal);
+      setStateText("strategyData", "Backend response received");
+      $("reasonText").textContent = text(reason, hasRealSignal ? "The backend returned a signal but did not provide a reason." : "The backend response did not include a valid BUY, SELL, or WAIT signal. Showing WAIT for safety.");
+      $("overviewText").textContent = trend !== null ? symbol + " trend reported by backend: " + trend + ". " + text(reason, "No additional explanation was provided.") : "Backend response received, but no market trend field was supplied.";
+      // Bars are qualitative UI aids, not win-rate or probability displays. Only show a bar when a numeric score exists.
+      const numericScore = score !== null && Number.isFinite(Number(score)) ? Math.max(0, Math.min(100, Number(score))) : null;
+      $("scoreBar").style.width = numericScore === null ? "0%" : numericScore + "%";
+      $("scoreBarLabel").textContent = numericScore === null ? "—" : Math.round(numericScore) + "%";
+      const trendVal = trend === null ? null : (String(trend).toLowerCase().includes("bull") ? 75 : String(trend).toLowerCase().includes("bear") ? 25 : String(trend).toLowerCase().includes("side") ? 50 : null);
+      $("trendBar").style.width = trendVal === null ? "0%" : trendVal + "%";
+      $("trendBarLabel").textContent = trendVal === null ? "—" : String(trendVal) + "%";
+      const momentumVal = macd === null ? null : (String(macd).toLowerCase().includes("positive") || String(macd).toLowerCase().includes("bull") ? 75 : String(macd).toLowerCase().includes("negative") || String(macd).toLowerCase().includes("bear") ? 25 : 50);
+      $("momentumBar").style.width = momentumVal === null ? "0%" : momentumVal + "%";
+      $("momentumBarLabel").textContent = momentumVal === null ? "—" : String(momentumVal) + "%";
+      $("chartMessage").textContent = "Chart data not supplied by backend";
+      $("chartDataStatus").textContent = "No OHLC candle endpoint connected";
+      if (price !== null || hasRealSignal) {
+        state.lastResult = {symbol, signal:safeSignal, score, price, trend, analyzedAt:analyzedAtValue, reason:text(reason,"")};
+        state.history.unshift(state.lastResult);
+        state.history = state.history.slice(0, 20);
+        renderHistory();
+      }
+    }
+    function renderHistory() {
+      const host = $("historyList");
+      if (!state.history.length) {
+        host.className = "history-empty";
+        host.textContent = "No analysis history yet.";
+        return;
+      }
+      host.className = "history-list";
+      host.replaceChildren();
+      state.history.forEach(item => {
+        const row = document.createElement("div");
+        row.className = "history-item";
+        const left = document.createElement("div");
+        left.textContent = item.symbol;
+        const small = document.createElement("small");
+        small.textContent = formatTimestamp(item.analyzedAt);
+        left.append(small);
+        const sig = document.createElement("strong");
+        sig.className = "history-signal " + (item.signal === "BUY" ? "positive" : item.signal === "SELL" ? "negative" : "neutral");
+        sig.textContent = item.signal;
+        const score = document.createElement("span");
+        score.className = "history-score";
+        score.textContent = item.score === null ? "Score —" : "Score " + fmt(item.score,1) + (String(item.score).includes("%") ? "" : "%");
+        row.append(left,sig,score);
+        host.append(row);
+      });
+    }
+    async function analyzeMarket() {
+      if (state.busy) return;
+      state.busy = true;
+      $("analyzeBtn").disabled = true;
+      $("analyzeBtnText").innerHTML = '<span class="loading"></span>Analyzing';
+      clearDisplayForRequest();
+      updateSelectedLabels();
+      const symbol = encodeURIComponent($("symbolSelect").value);
+      const interval = encodeURIComponent($("timeframeSelect").value);
+      try {
+        // Existing backend is expected to accept GET /api/analyze?symbol=EUR/USD&interval=1min.
+        const url = API_BASE + "/api/analyze?symbol=" + symbol + "&interval=" + interval;
+        const data = await fetchJson(url, 45000);
+        renderAnalysis(data);
+        setConnection(true, "Backend connected");
+        $("dataStatus").textContent = "Analysis received";
+        showToast("Analysis response received from backend.");
+      } catch (err) {
+        setConnection(false, "Analysis unavailable");
+        $("dataStatus").textContent = "Error";
+        $("chartDataStatus").textContent = "Unavailable";
+        $("signalValue").textContent = "WAIT";
+        $("signalCaption").textContent = "No verified analysis";
+        $("signalIcon").textContent = "!";
+        $("reasonText").textContent = "Could not obtain a valid analysis: " + err.message + " No BUY/SELL signal is being generated locally.";
+        $("overviewText").textContent = "Analysis failed. Check the backend health endpoint, Render logs, API quota, and response format.";
+        setStateText("strategyData","Connection error");
+        showToast("Analysis failed: " + err.message);
+      } finally {
+        state.busy = false;
+        $("analyzeBtn").disabled = false;
+        $("analyzeBtnText").textContent = "Analyze Market";
+      }
+    }
+
+    function switchView(target) {
+      const main = document.querySelector("main");
+      main.dataset.view = target;
+      document.querySelectorAll(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.target === target));
+      const names = {dashboard:"Dashboard", analysis:"Market Analysis", history:"Signal History", settings:"Connection Settings"};
+      $("viewTitle").textContent = names[target] || "Dashboard";
+      // Return to the top of the selected app screen; navigation does not jump down the long page.
+      window.scrollTo({top:0, behavior:"instant"});
+    }
+    document.querySelectorAll(".nav-btn").forEach(btn => btn.addEventListener("click", () => switchView(btn.dataset.target)));
+    document.querySelectorAll(".tf-btn").forEach(btn => btn.addEventListener("click", () => {
+      document.querySelectorAll(".tf-btn").forEach(b => b.classList.toggle("active", b === btn));
+      $("timeframeSelect").value = btn.dataset.tf;
+      updateSelectedLabels();
+    }));
+    $("timeframeSelect").addEventListener("change", () => {
+      document.querySelectorAll(".tf-btn").forEach(b => b.classList.toggle("active", b.dataset.tf === $("timeframeSelect").value));
+      updateSelectedLabels();
+    });
+    $("symbolSelect").addEventListener("change", updateSelectedLabels);
+    $("analyzeBtn").addEventListener("click", analyzeMarket);
+    $("healthBtn").addEventListener("click", () => checkHealth(true));
+    $("clearHistoryBtn").addEventListener("click", () => { state.history = []; renderHistory(); showToast("Browser-session history cleared."); });
+
+    updateClock();
+    setInterval(updateClock, 1000);
+    updateSelectedLabels();
+    checkHealth(false);
+  </script>
+</body>
+</html>
 
