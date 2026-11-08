@@ -16,15 +16,22 @@ let scanning = false;
 const $ = id => document.getElementById(id);
 
 function setMessage(message) {
-  $("messageBox").textContent = message;
+  const box = $("messageBox");
+  if (box) box.textContent = message;
 }
 
-function formatPrice(value) {
-  if (value === null || value === undefined || !Number.isFinite(Number(value))) {
+function formatPrice(value, pair = selectedPair) {
+  if (
+    value === null ||
+    value === undefined ||
+    !Number.isFinite(Number(value))
+  ) {
     return "--";
   }
 
-  return Number(value).toFixed(6);
+  const digits = pair.includes("JPY") ? 3 : 6;
+
+  return Number(value).toFixed(digits);
 }
 
 function formatTime(value) {
@@ -46,61 +53,93 @@ function signalClass(signal) {
 function showSignal(result) {
   const box = $("signalBox");
 
+  if (!box) return;
+
   if (!result || result.dataStatus !== "VALID") {
     box.className = "signal-box waiting";
+
     $("signalValue").textContent = "WAIT";
     $("signalPair").textContent = selectedPair;
     $("signalConfidence").textContent = "--";
     $("signalStatus").textContent = "Data unavailable";
+
     $("signalReason").textContent =
       result?.error || "Valid market data is not available.";
+
     return;
   }
 
   const signal = result.signal || "WAIT";
 
-  box.className = "signal-box " +
-    (signal === "CALL" ? "call" :
-     signal === "PUT" ? "put" : "waiting");
+  box.className =
+    "signal-box " +
+    (signal === "CALL"
+      ? "call"
+      : signal === "PUT"
+      ? "put"
+      : "waiting");
 
   $("signalValue").textContent = signal;
   $("signalPair").textContent = result.symbol;
+
   $("signalConfidence").textContent =
     result.confidence + "/100";
-  $("signalStatus").textContent = "Analyzed";
-  $("signalReason").textContent = result.reason || "No reason supplied.";
 
-  $("marketPrice").textContent = formatPrice(result.price);
+  $("signalStatus").textContent =
+    signal === "WAIT" ? "No strong setup" : "Analyzed";
+
+  $("signalReason").textContent =
+    result.reason || "No reason supplied.";
+
+  $("marketPrice").textContent =
+    formatPrice(result.price, result.symbol);
+
   $("marketTrend").textContent = result.trend || "--";
+
   $("analysisScore").textContent =
     result.confidence + "/100";
+
   $("selectedPairLabel").textContent = result.symbol;
 
   const indicators = result.indicators || {};
 
   $("rsiValue").textContent =
-    indicators.rsi !== undefined ? indicators.rsi : "--";
+    indicators.rsi ?? "--";
 
   $("rsiStatus").textContent =
-    indicators.rsi > 70 ? "Overbought" :
-    indicators.rsi < 30 ? "Oversold" :
-    indicators.rsi !== undefined ? "Normal range" : "Waiting";
+    indicators.rsi > 70
+      ? "Overbought"
+      : indicators.rsi < 30
+      ? "Oversold"
+      : indicators.rsi !== undefined
+      ? "Normal range"
+      : "Waiting";
 
-  $("ema9Value").textContent = formatPrice(indicators.ema9);
-  $("ema21Value").textContent = formatPrice(indicators.ema21);
+  $("ema9Value").textContent =
+    formatPrice(indicators.ema9, result.symbol);
+
+  $("ema21Value").textContent =
+    formatPrice(indicators.ema21, result.symbol);
 
   $("macdValue").textContent =
-    indicators.macd !== undefined ? indicators.macd : "--";
+    indicators.macd ?? "--";
 
   $("macdStatus").textContent =
     indicators.macdTrend || "Waiting";
 
   const candle = result.candle || {};
 
-  $("candleOpen").textContent = formatPrice(candle.open);
-  $("candleHigh").textContent = formatPrice(candle.high);
-  $("candleLow").textContent = formatPrice(candle.low);
-  $("candleClose").textContent = formatPrice(candle.close);
+  $("candleOpen").textContent =
+    formatPrice(candle.open, result.symbol);
+
+  $("candleHigh").textContent =
+    formatPrice(candle.high, result.symbol);
+
+  $("candleLow").textContent =
+    formatPrice(candle.low, result.symbol);
+
+  $("candleClose").textContent =
+    formatPrice(candle.close, result.symbol);
 
   $("candleTime").textContent =
     "Last closed candle: " + formatTime(result.candleTime);
@@ -111,6 +150,8 @@ function showSignal(result) {
 
 function renderTable(results) {
   const tbody = $("marketTable");
+
+  if (!tbody) return;
 
   if (!Array.isArray(results) || results.length === 0) {
     tbody.innerHTML = `
@@ -128,26 +169,29 @@ function renderTable(results) {
     const signal = valid ? result.signal : "WAIT";
     const indicators = result.indicators || {};
 
+    const symbol = PAIRS.includes(result.symbol)
+      ? result.symbol
+      : "--";
+
+    const status = valid ? "VALID" : "ERROR";
+
     return `
-      <tr>
-        <td><strong>${result.symbol}</strong></td>
-        <td>${valid ? formatPrice(result.price) : "--"}</td>
+      <tr data-pair="${symbol}">
+        <td><strong>${symbol}</strong></td>
+        <td>${valid ? formatPrice(result.price, symbol) : "--"}</td>
         <td>${valid ? result.trend : "--"}</td>
-        <td>${valid ? indicators.rsi : "--"}</td>
+        <td>${valid ? indicators.rsi ?? "--" : "--"}</td>
         <td class="${signalClass(signal)}">${signal}</td>
-        <td>${valid ? "VALID" : "ERROR"}</td>
+        <td>${status}</td>
       </tr>
     `;
   }).join("");
 
-  tbody.querySelectorAll("tr").forEach((row, index) => {
-    const result = results[index];
-
+  tbody.querySelectorAll("tr[data-pair]").forEach(row => {
     row.style.cursor = "pointer";
 
     row.addEventListener("click", () => {
-      if (!result) return;
-      selectPair(result.symbol);
+      selectPair(row.dataset.pair);
     });
   });
 }
@@ -157,7 +201,8 @@ function updateValidMarkets(results) {
     result => result.dataStatus === "VALID"
   ).length;
 
-  $("validMarkets").textContent = valid + "/" + PAIRS.length;
+  $("validMarkets").textContent =
+    valid + "/" + PAIRS.length;
 }
 
 function selectPair(pair) {
@@ -189,9 +234,10 @@ function selectPair(pair) {
 
 async function checkHealth() {
   try {
-    const response = await fetch(API_BASE + "/api/health", {
-      cache: "no-store"
-    });
+    const response = await fetch(
+      API_BASE + "/api/health",
+      { cache: "no-store" }
+    );
 
     if (!response.ok) {
       throw new Error("Backend HTTP " + response.status);
@@ -205,17 +251,24 @@ async function checkHealth() {
 
     $("connectionStatus").textContent = "Backend Connected";
     $("statusDot").className = "status-dot online";
-
     $("backendStatus").textContent = "Connected";
+
     $("apiStatus").textContent =
-      data.twelveDataConfigured ? "Configured" : "API key missing";
+      data.twelveDataConfigured
+        ? "Configured"
+        : "API key missing";
 
     if (!data.twelveDataConfigured) {
-      setMessage("Backend connected, but Twelve Data API key is missing.");
+      setMessage(
+        "Backend connected, but Twelve Data API key is missing."
+      );
       return false;
     }
 
-    setMessage("Backend and Twelve Data configuration verified.");
+    setMessage(
+      "Backend and Twelve Data configuration verified."
+    );
+
     return true;
 
   } catch (error) {
@@ -224,7 +277,10 @@ async function checkHealth() {
     $("backendStatus").textContent = "Disconnected";
     $("apiStatus").textContent = "Unavailable";
 
-    setMessage("Backend connection error: " + error.message);
+    setMessage(
+      "Backend connection error: " + error.message
+    );
+
     return false;
   }
 }
@@ -235,28 +291,40 @@ async function scanMarkets() {
   scanning = true;
 
   const button = $("scanButton");
-  button.disabled = true;
-  button.textContent = "Analyzing markets...";
 
-  setMessage("Collecting real market data for all six pairs...");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Analyzing markets...";
+  }
+
+  setMessage(
+    "Collecting and analyzing real market data..."
+  );
 
   try {
-    const response = await fetch(API_BASE + "/api/scan", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      cache: "no-store"
-    });
+    const response = await fetch(
+      API_BASE + "/api/scan",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        cache: "no-store"
+      }
+    );
 
     const data = await response.json();
 
     if (!response.ok || !data.success) {
-      throw new Error(data.error || "Market scan failed");
+      throw new Error(
+        data.error || "Market scan failed"
+      );
     }
 
     if (!Array.isArray(data.pairs)) {
-      throw new Error("Invalid scan response from backend");
+      throw new Error(
+        "Invalid scan response from backend"
+      );
     }
 
     latestResults = data.pairs;
@@ -279,28 +347,39 @@ async function scanMarkets() {
     ).length;
 
     const signals = latestResults.filter(
-      result => result.dataStatus === "VALID" &&
-      result.signal !== "WAIT"
+      result =>
+        result.dataStatus === "VALID" &&
+        result.signal !== "WAIT"
     );
 
     if (valid === 0) {
-      setMessage("No valid market data received. Check Twelve Data API and Render logs.");
+      setMessage(
+        "No valid market data received. Check Twelve Data API limits and Render logs."
+      );
     } else {
       setMessage(
-        "Analysis complete. " + valid +
-        " of 6 markets verified. " +
-        signals.length + " active signal(s) found."
+        "Analysis complete. " +
+        valid + " of " + PAIRS.length +
+        " markets verified. " +
+        signals.length +
+        " active signal(s) found."
       );
     }
 
-    $("lastAnalysis").textContent = formatTime(data.analysisTime);
+    $("lastAnalysis").textContent =
+      formatTime(data.analysisTime);
 
   } catch (error) {
     setMessage("Analysis error: " + error.message);
+
   } finally {
     scanning = false;
-    button.disabled = false;
-    button.innerHTML = "<span>↻</span> Analyze All Markets";
+
+    if (button) {
+      button.disabled = false;
+      button.innerHTML =
+        "<span>↻</span> Analyze All Markets";
+    }
   }
 }
 
@@ -322,7 +401,10 @@ async function initialize() {
   }
 }
 
-$("scanButton").addEventListener("click", scanMarkets);
+const scanButton = $("scanButton");
+
+if (scanButton) {
+  scanButton.addEventListener("click", scanMarkets);
+}
 
 initialize();
-
