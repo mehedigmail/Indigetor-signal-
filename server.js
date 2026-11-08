@@ -4,12 +4,12 @@ const express = require("express");
 const cors = require("cors");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
 app.use(express.static(__dirname));
 
+const PORT = process.env.PORT || 3000;
 const TWELVE_DATA_API_KEY = process.env.TWELVE_DATA_API_KEY;
 
 const PAIRS = [
@@ -21,49 +21,59 @@ const PAIRS = [
   "EUR/GBP"
 ];
 
-const TIMEFRAME = "1min";
-const CANDLE_LIMIT = 120;
+const INTERVAL = "1min";
+const OUTPUT_SIZE = 120;
 
-// API control settings
-const CACHE_TTL = 60 * 1000;
-const REQUEST_GAP = 8000;
-const MAX_RETRIES = 2;
-
-let lastScan = null;
-let scanInProgress = false;
+// Adjust these according to your Twelve Data plan.
+const CACHE_TTL = 50000;
+const REQUEST_GAP = Number(process.env.REQUEST_GAP_MS || 8000);
 
 const marketCache = new Map();
 const pendingRequests = new Map();
 
 let requestQueue = Promise.resolve();
 let lastApiRequestAt = 0;
+let lastScan = null;
+
+// -----------------------------
+// BASIC HELPERS
+// -----------------------------
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function parseDateUTC(value) {
-  if (!value) return NaN;
-
-  const text = String(value).trim();
-
-  // Twelve Data datetime format: YYYY-MM-DD HH:mm:ss
-  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text)) {
-    return Date.parse(text.replace(" ", "T") + "Z");
-  }
-
-  return Date.parse(text);
+  return new Date(value.replace(" ", "T") + "Z");
 }
+
+function getCurrentMinuteStart() {
+  const now = new Date();
+  now.setUTCSeconds(0, 0);
+  return now;
+}
+
+function round(value, digits = 6) {
+  return Number(Number(value).toFixed(digits));
+}
+
+function pairDigits(pair) {
+  return pair.includes("JPY") ? 3 : 6;
+}
+
+// -----------------------------
+// API REQUEST QUEUE
+// -----------------------------
 
 function queuedFetch(url) {
   const task = requestQueue.then(async () => {
-    const wait = Math.max(
+    const waitTime = Math.max(
       0,
       REQUEST_GAP - (Date.now() - lastApiRequestAt)
     );
 
-    if (wait > 0) {
-      await sleep(wait);
+    if (waitTime > 0) {
+      await sleep(waitTime);
     }
 
     lastApiRequestAt = Date.now();
@@ -73,61 +83,185 @@ function queuedFetch(url) {
     });
   });
 
-  requestQueue = task.then(
-    () => undefined,
-    () => undefined
-  );
-
+  requestQueue = task.catch(() => {});
   return task;
 }
 
-function retryDelay(response, attempt) {
-  const header = response.headers.get("retry-after");
+// -----------------------------
+// TWELVE DATA
+// -----------------------------
 
-  if (header) {
-    const seconds = Number(header);
-
-    if (Number.isFinite(seconds) && seconds >= 0) {
-      return seconds * 1000;
-    }
-
-    const date = Date.parse(header);
-
-    if (Number.isFinite(date)) {
-      return Math.max(1000, date - Date.now());
-    }
+async function fetchCandles(pair) {
+  if (!TWELVE_DATA_API_KEY) {
+    throw new Error("TWELVE_DATA_API_KEY is missing.");
   }
 
-  return 15000 * (attempt + 1);
+  const url = new URL(
+    "https://api.twelvedata.com/time_series"
+  );
+
+  url.searchParams.set("symbol", pair);
+  url.searchParams.set("interval", INTERVAL);
+  url.searchParams.set("outputsize", String(OUTPUT_SIZE));
+  url.searchParams.set("timezone", "UTC");
+  url.searchParams.set("apikey", TWELVE_DATA_API_KEY);
+
+  let response;
+  let data;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    response = await queuedFetch(url.toString());
+
+    data = await response.json().catch(() => null);
+
+    const rateLimited =
+      response.status === 429 ||
+      (data && Number(data.code) === 429);
+
+    if (!rateLimited) break;
+
+    if (attempt === 1) {
+      throw new Error("Twelve Data API rate limit (429).");
+    }
+
+    const retryAfter = Number(
+      response.headers.get("retry-after")
+    );
+
+    await sleep(
+      retryAfter > 0 ? retryAfter * 1000 : 20000
+    );
+  }
+
+  if (!response || !response.ok) {
+    throw new Error(
+      data?.message || `Market API HTTP error: ${response?.status}`
+    );
+  }
+
+  if (!data || !Array.isArray(data.values)) {
+    throw new Error(
+      data?.message || "Market candle data unavailable."
+    );
+  }
+
+  const candles = data.values
+    .map(item => ({
+      time: parseDateUTC(item.datetime),
+      open: Number(item.open),
+      high: Number(item.high),
+      low: Number(item.low),
+      close: Number(item.close)
+    }))
+    .filter(c =>
+      Number.isFinite(c.time.getTime()) &&
+      Number.isFinite(c.open) &&
+      Number.isFinite(c.high) &&
+      Number.isFinite(c.low) &&
+      Number.isFinite(c.close) &&
+      c.high >= c.low
+    )
+    .sort((a, b) => a.time - b.time);
+
+  // Only use fully closed candles.
+  const currentMinute = getCurrentMinuteStart();
+
+  const closedCandles = candles.filter(
+    candle => candle.time < currentMinute
+  );
+
+  if (closedCandles.length < 40) {
+    throw new Error("Not enough closed candles for analysis.");
+  }
+
+  const lastCandle =
+    closedCandles[closedCandles.length - 1];
+
+  const candleCloseTime =
+    lastCandle.time.getTime() + 60000;
+
+  const candleAge = Date.now() - candleCloseTime;
+
+  if (candleAge > 180000 || candleAge < -60000) {
+    throw new Error("Market data is stale or time is invalid.");
+  }
+
+  return {
+    pair,
+    candles: closedCandles,
+    price: lastCandle.close,
+    lastCandleTime: lastCandle.time.toISOString(),
+    fetchedAt: new Date().toISOString()
+  };
 }
 
+// -----------------------------
+// CACHE
+// -----------------------------
+
+async function getMarketData(pair, force = false) {
+  const cached = marketCache.get(pair);
+
+  if (
+    !force &&
+    cached &&
+    Date.now() - cached.savedAt < CACHE_TTL
+  ) {
+    return cached.data;
+  }
+
+  if (pendingRequests.has(pair)) {
+    return pendingRequests.get(pair);
+  }
+
+  const request = fetchCandles(pair)
+    .then(data => {
+      marketCache.set(pair, {
+        data,
+        savedAt: Date.now()
+      });
+
+      return data;
+    })
+    .finally(() => {
+      pendingRequests.delete(pair);
+    });
+
+  pendingRequests.set(pair, request);
+
+  return request;
+}
+
+// -----------------------------
+// EMA
+// -----------------------------
+
 function emaSeries(values, period) {
-  const result = Array(values.length).fill(null);
+  if (values.length < period) return [];
 
-  if (values.length < period) return result;
-
+  const result = [];
   const multiplier = 2 / (period + 1);
 
-  let current = values
-    .slice(0, period)
-    .reduce((sum, value) => sum + value, 0) / period;
+  let previous =
+    values.slice(0, period).reduce((a, b) => a + b, 0) /
+    period;
 
-  result[period - 1] = current;
+  result[period - 1] = previous;
 
   for (let i = period; i < values.length; i++) {
-    current =
-      (values[i] - current) * multiplier + current;
+    previous =
+      values[i] * multiplier +
+      previous * (1 - multiplier);
 
-    result[i] = current;
+    result[i] = previous;
   }
 
   return result;
 }
 
-function ema(values, period) {
-  const series = emaSeries(values, period);
-  return series[series.length - 1];
-}
+// -----------------------------
+// RSI
+// -----------------------------
 
 function calculateRSI(values, period = 14) {
   if (values.length <= period) return null;
@@ -139,404 +273,331 @@ function calculateRSI(values, period = 14) {
     const change = values[i] - values[i - 1];
 
     if (change > 0) gains += change;
-    else losses -= change;
+    else losses += Math.abs(change);
   }
 
-  let avgGain = gains / period;
-  let avgLoss = losses / period;
+  let averageGain = gains / period;
+  let averageLoss = losses / period;
 
   for (let i = period + 1; i < values.length; i++) {
     const change = values[i] - values[i - 1];
 
-    avgGain =
-      (avgGain * (period - 1) + Math.max(change, 0)) / period;
+    const gain = Math.max(change, 0);
+    const loss = Math.max(-change, 0);
 
-    avgLoss =
-      (avgLoss * (period - 1) + Math.max(-change, 0)) / period;
+    averageGain =
+      (averageGain * (period - 1) + gain) / period;
+
+    averageLoss =
+      (averageLoss * (period - 1) + loss) / period;
   }
 
-  if (avgGain === 0 && avgLoss === 0) return 50;
-  if (avgLoss === 0) return 100;
+  if (averageGain === 0 && averageLoss === 0) return 50;
+  if (averageLoss === 0) return 100;
 
-  const rs = avgGain / avgLoss;
+  const rs = averageGain / averageLoss;
 
   return 100 - 100 / (1 + rs);
 }
 
-function calculateMACD(values) {
-  if (values.length < 35) return null;
+// -----------------------------
+// MACD
+// -----------------------------
 
+function calculateMACD(values) {
   const fast = emaSeries(values, 12);
   const slow = emaSeries(values, 26);
 
   const macdLine = [];
 
   for (let i = 0; i < values.length; i++) {
-    if (fast[i] !== null && slow[i] !== null) {
+    if (fast[i] !== undefined && slow[i] !== undefined) {
       macdLine.push(fast[i] - slow[i]);
     }
   }
 
   const signalLine = emaSeries(macdLine, 9);
 
-  const current = macdLine[macdLine.length - 1];
-  const signal = signalLine[signalLine.length - 1];
-
-  if (!Number.isFinite(current) || !Number.isFinite(signal)) {
+  if (!macdLine.length || !signalLine.length) {
     return null;
   }
 
+  const macd = macdLine[macdLine.length - 1];
+  const signal = signalLine[signalLine.length - 1];
+
   return {
-    value: current,
+    macd,
     signal,
-    histogram: current - signal,
-    trend: current > signal ? "BULLISH" :
-      current < signal ? "BEARISH" : "NEUTRAL"
+    histogram: macd - signal
   };
 }
 
-async function fetchMarketData(symbol) {
-  const url = new URL(
-    "https://api.twelvedata.com/time_series"
-  );
+// -----------------------------
+// MARKET ANALYSIS
+// -----------------------------
 
-  url.searchParams.set("symbol", symbol);
-  url.searchParams.set("interval", TIMEFRAME);
-  url.searchParams.set("outputsize", String(CANDLE_LIMIT));
-  url.searchParams.set("timezone", "UTC");
-  url.searchParams.set("apikey", TWELVE_DATA_API_KEY);
-
-  let data;
-
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    const response = await queuedFetch(url);
-
-    try {
-      data = await response.json();
-    } catch {
-      throw new Error("Invalid response from Twelve Data");
-    }
-
-    const isRateLimited =
-      response.status === 429 ||
-      Number(data.code) === 429;
-
-    if (isRateLimited) {
-      if (attempt === MAX_RETRIES) {
-        throw new Error(
-          "Twelve Data rate limit reached. Please wait and retry."
-        );
-      }
-
-      await sleep(retryDelay(response, attempt));
-      continue;
-    }
-
-    if (!response.ok) {
-      throw new Error(
-        `Market API HTTP error: ${response.status}`
-      );
-    }
-
-    if (data.status === "error" || !Array.isArray(data.values)) {
-      throw new Error(
-        data.message || "Invalid market data"
-      );
-    }
-
-    break;
-  }
-
-  if (!data || !Array.isArray(data.values)) {
-    throw new Error("Market data unavailable");
-  }
-
-  const candles = data.values
-    .map(c => ({
-      time: c.datetime,
-      open: Number(c.open),
-      high: Number(c.high),
-      low: Number(c.low),
-      close: Number(c.close)
-    }))
-    .filter(c =>
-      Number.isFinite(c.open) &&
-      Number.isFinite(c.high) &&
-      Number.isFinite(c.low) &&
-      Number.isFinite(c.close) &&
-      c.high >= c.low &&
-      c.high >= Math.max(c.open, c.close) &&
-      c.low <= Math.min(c.open, c.close)
-    )
-    .sort(
-      (a, b) => parseDateUTC(a.time) - parseDateUTC(b.time)
-    );
-
-  if (candles.length < 40) {
-    throw new Error("Not enough valid candles");
-  }
-
-  const now = Date.now();
-  const currentMinute = Math.floor(now / 60000) * 60000;
-
-  const closedCandles = candles.filter(c => {
-    const timestamp = parseDateUTC(c.time);
-
-    return Number.isFinite(timestamp) &&
-      timestamp < currentMinute;
-  });
-
-  if (closedCandles.length < 40) {
-    throw new Error("Not enough closed candles");
-  }
-
-  const lastCandle = closedCandles[closedCandles.length - 1];
-  const lastTime = parseDateUTC(lastCandle.time);
-  const age = now - lastTime;
-
-  if (age > 5 * 60 * 1000 || age < 0) {
-    throw new Error("Market data is stale");
-  }
-
-  return closedCandles.slice(-CANDLE_LIMIT);
-}
-
-async function getMarketData(symbol) {
-  if (!TWELVE_DATA_API_KEY) {
-    throw new Error("Twelve Data API key is missing");
-  }
-
-  const cached = marketCache.get(symbol);
-
-  if (cached && Date.now() - cached.savedAt < CACHE_TTL) {
-    return cached.candles;
-  }
-
-  if (pendingRequests.has(symbol)) {
-    return pendingRequests.get(symbol);
-  }
-
-  const request = fetchMarketData(symbol)
-    .then(candles => {
-      marketCache.set(symbol, {
-        candles,
-        savedAt: Date.now()
-      });
-
-      return candles;
-    })
-    .finally(() => {
-      pendingRequests.delete(symbol);
-    });
-
-  pendingRequests.set(symbol, request);
-
-  return request;
-}
-
-function analyzeMarket(symbol, candles) {
+function analyzeCandles(market) {
+  const candles = market.candles;
   const closes = candles.map(c => c.close);
 
+  const ema9Series = emaSeries(closes, 9);
+  const ema21Series = emaSeries(closes, 21);
+
+  const ema9 = ema9Series.at(-1);
+  const ema21 = ema21Series.at(-1);
+
+  const previousEMA9 = ema9Series.at(-2);
+  const previousEMA21 = ema21Series.at(-2);
+
   const rsi = calculateRSI(closes, 14);
-  const ema9 = ema(closes, 9);
-  const ema21 = ema(closes, 21);
-  const macd = calculateMACD(closes);
+  const macdData = calculateMACD(closes);
 
   if (
-    rsi === null ||
-    ema9 === null ||
-    ema21 === null ||
-    !macd ||
-    !Number.isFinite(rsi) ||
-    !Number.isFinite(ema9) ||
-    !Number.isFinite(ema21)
+    ema9 == null ||
+    ema21 == null ||
+    rsi == null ||
+    !macdData
   ) {
-    throw new Error("Indicator calculation failed");
+    throw new Error("Indicator calculation unavailable.");
   }
 
-  const last = candles[candles.length - 1];
-  const previous = candles[candles.length - 2];
-
-  const bullishEMA = ema9 > ema21;
-  const bearishEMA = ema9 < ema21;
-
-  const bullishMACD = macd.value > macd.signal;
-  const bearishMACD = macd.value < macd.signal;
-
-  const bullishCandle = last.close > last.open;
-  const bearishCandle = last.close < last.open;
+  const last = candles.at(-1);
+  const previous = candles.at(-2);
 
   let callScore = 0;
   let putScore = 0;
 
-  if (bullishEMA) callScore += 2;
-  if (bearishEMA) putScore += 2;
+  // EMA direction and alignment
+  if (ema9 > ema21 && ema9 >= previousEMA9) {
+    callScore += 2;
+  }
 
-  if (bullishMACD) callScore += 2;
-  if (bearishMACD) putScore += 2;
+  if (ema9 < ema21 && ema9 <= previousEMA9) {
+    putScore += 2;
+  }
 
-  if (rsi >= 50 && rsi <= 68) callScore += 1;
-  if (rsi <= 50 && rsi >= 32) putScore += 1;
+  // MACD confirmation
+  if (
+    macdData.macd > macdData.signal &&
+    macdData.histogram > 0
+  ) {
+    callScore += 2;
+  }
 
-  if (bullishCandle) callScore += 1;
-  if (bearishCandle) putScore += 1;
+  if (
+    macdData.macd < macdData.signal &&
+    macdData.histogram < 0
+  ) {
+    putScore += 2;
+  }
 
+  // RSI confirmation
+  if (rsi >= 50 && rsi <= 68) {
+    callScore += 1;
+  }
+
+  if (rsi <= 50 && rsi >= 32) {
+    putScore += 1;
+  }
+
+  // Candle direction
+  if (last.close > last.open) callScore += 1;
+  if (last.close < last.open) putScore += 1;
+
+  // Breakout confirmation
   if (last.close > previous.high) callScore += 1;
   if (last.close < previous.low) putScore += 1;
 
   let signal = "WAIT";
-  let confidence = 0;
-  let reason = "Market conditions are not strong enough.";
 
-  if (callScore >= 6 && callScore - putScore >= 3) {
+  if (
+    callScore >= 5 &&
+    callScore - putScore >= 2
+  ) {
     signal = "CALL";
-    confidence = Math.round((callScore / 7) * 100);
-    reason = "Bullish EMA, MACD and price action alignment.";
-  } else if (putScore >= 6 && putScore - callScore >= 3) {
+  } else if (
+    putScore >= 5 &&
+    putScore - callScore >= 2
+  ) {
     signal = "PUT";
-    confidence = Math.round((putScore / 7) * 100);
-    reason = "Bearish EMA, MACD and price action alignment.";
   }
 
+  const score = Math.max(callScore, putScore);
+
   return {
-    symbol,
-    timeframe: TIMEFRAME,
+    pair: market.pair,
+    price: market.price,
     signal,
-    confidence,
-    price: last.close,
-    trend: bullishEMA ? "BULLISH" :
-      bearishEMA ? "BEARISH" : "SIDEWAYS",
-    reason,
+    technicalScore: Math.round((score / 7) * 100),
+    trend: ema9 > ema21 ? "BULLISH" : "BEARISH",
 
     indicators: {
-      rsi: Number(rsi.toFixed(2)),
-      ema9: Number(ema9.toFixed(6)),
-      ema21: Number(ema21.toFixed(6)),
-      macd: Number(macd.value.toFixed(8)),
-      macdSignal: Number(macd.signal.toFixed(8)),
-      macdTrend: macd.trend
+      rsi: round(rsi, 2),
+      ema9: round(ema9, pairDigits(market.pair)),
+      ema21: round(ema21, pairDigits(market.pair)),
+      macd: round(macdData.macd, 8),
+      macdSignal: round(macdData.signal, 8),
+      macdHistogram: round(macdData.histogram, 8)
     },
 
-    candle: last,
-    candleCount: candles.length,
-    candleTime: last.time,
+    candle: {
+      open: last.open,
+      high: last.high,
+      low: last.low,
+      close: last.close,
+      time: market.lastCandleTime
+    },
+
     dataStatus: "VALID",
-    analysisTime: new Date().toISOString()
+    reason:
+      signal === "WAIT"
+        ? "Conditions are not strong enough for a trade signal."
+        : `${signal} setup confirmed by technical indicators.`
   };
 }
+
+// -----------------------------
+// HEALTH
+// -----------------------------
 
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
-    message: "Rule-Based Market Engine is running",
+    message: "Auto Best Market Signal Engine running",
     twelveDataConfigured: Boolean(TWELVE_DATA_API_KEY),
+    analysisEngine: "Rule-Based JavaScript",
     aiApiUsed: false,
     pairs: PAIRS,
-    timeframe: TIMEFRAME,
-    candleHistory: CANDLE_LIMIT,
-    cacheSeconds: CACHE_TTL / 1000,
-    requestGapSeconds: REQUEST_GAP / 1000
+    timeframe: INTERVAL,
+    requestGapMs: REQUEST_GAP
   });
 });
 
-app.get("/api/pairs", (req, res) => {
-  res.json({ pairs: PAIRS });
+// -----------------------------
+// AUTOMATIC BEST MARKET SCAN
+// -----------------------------
+
+app.post("/api/scan", async (req, res) => {
+  if (!TWELVE_DATA_API_KEY) {
+    return res.status(503).json({
+      success: false,
+      message: "Twelve Data API key is not configured."
+    });
+  }
+
+  const results = [];
+  let rateLimited = false;
+
+  for (const pair of PAIRS) {
+    try {
+      const market = await getMarketData(pair, true);
+      const analysis = analyzeCandles(market);
+
+      results.push(analysis);
+    } catch (error) {
+      const message = error.message || "Market analysis failed.";
+
+      results.push({
+        pair,
+        signal: "WAIT",
+        technicalScore: null,
+        dataStatus: "ERROR",
+        reason: message
+      });
+
+      if (message.includes("429")) {
+        rateLimited = true;
+        break;
+      }
+    }
+  }
+
+  // Mark pairs not checked after a rate limit.
+  for (const pair of PAIRS) {
+    if (!results.some(item => item.pair === pair)) {
+      results.push({
+        pair,
+        signal: "WAIT",
+        technicalScore: null,
+        dataStatus: "NOT_CHECKED",
+        reason: "Scan paused because of API rate limit."
+      });
+    }
+  }
+
+  const validResults = results
+    .filter(item => item.dataStatus === "VALID")
+    .sort((a, b) => b.technicalScore - a.technicalScore);
+
+  const selected = validResults[0] || null;
+
+  lastScan = {
+    scannedAt: new Date().toISOString(),
+    selected,
+    results
+  };
+
+  res.json({
+    success: true,
+    selected,
+    results,
+    validMarkets: validResults.length,
+    rateLimited,
+    message: selected
+      ? "Best available market selected."
+      : "No verified market data available."
+  });
 });
 
-app.get("/api/analyze", async (req, res) => {
-  try {
-    const symbol = req.query.symbol || "EUR/USD";
+// -----------------------------
+// ANALYZE SELECTED MARKET
+// -----------------------------
 
-    if (!PAIRS.includes(symbol)) {
+app.post("/api/analyze", async (req, res) => {
+  try {
+    const pair = String(req.body?.pair || "").toUpperCase();
+
+    if (!PAIRS.includes(pair)) {
       return res.status(400).json({
         success: false,
-        error: "Unsupported trading pair"
+        message: "Invalid market pair."
       });
     }
 
-    const candles = await getMarketData(symbol);
-    const analysis = analyzeMarket(symbol, candles);
+    // Force fresh data for the selected market.
+    const market = await getMarketData(pair, true);
+    const analysis = analyzeCandles(market);
 
     res.json({
       success: true,
-      analysis
+      result: analysis,
+      analyzedAt: new Date().toISOString()
     });
   } catch (error) {
     res.status(503).json({
       success: false,
-      error: error.message
+      message: error.message || "Analysis failed."
     });
   }
 });
 
-app.post("/api/scan", async (req, res) => {
-  if (scanInProgress) {
-    return res.status(409).json({
-      success: false,
-      error: "Scan already in progress. Please wait."
-    });
-  }
-
-  scanInProgress = true;
-
-  try {
-    const results = [];
-
-    // Sequential requests: do not hit Twelve Data all at once.
-    for (const symbol of PAIRS) {
-      try {
-        const candles = await getMarketData(symbol);
-        results.push(analyzeMarket(symbol, candles));
-      } catch (error) {
-        results.push({
-          symbol,
-          signal: "WAIT",
-          confidence: 0,
-          dataStatus: "ERROR",
-          error: error.message
-        });
-      }
-    }
-
-    const valid = results.filter(
-      r => r.dataStatus === "VALID"
-    );
-
-    const candidates = valid
-      .filter(r => r.signal !== "WAIT")
-      .sort((a, b) => b.confidence - a.confidence);
-
-    lastScan = {
-      success: true,
-      analysisTime: new Date().toISOString(),
-      pairs: results,
-      bestSignal: candidates[0] || null,
-      totalPairs: PAIRS.length,
-      validPairs: valid.length,
-      aiApiUsed: false
-    };
-
-    res.json(lastScan);
-
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  } finally {
-    scanInProgress = false;
-  }
-});
+// -----------------------------
+// LAST SCAN
+// -----------------------------
 
 app.get("/api/last-scan", (req, res) => {
-  res.json(lastScan || {
-    success: false,
-    message: "No scan has been completed yet"
+  res.json({
+    success: true,
+    scan: lastScan
   });
 });
 
+// -----------------------------
+// START SERVER
+// -----------------------------
+
 app.listen(PORT, () => {
   console.log(
-    `Real Market Signal Engine running on port ${PORT}`
+    `Auto Best Market Signal running on port ${PORT}`
   );
 });
