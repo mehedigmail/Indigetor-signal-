@@ -3,252 +3,207 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#080d18">
-  <title>Real Market Signal Engine</title>
+  <meta name="theme-color" content="#080D18">
+
+  <title>Auto Best Market Signal</title>
+
   <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
 
-<div class="app">
+  <main class="app-container">
 
-  <header class="topbar">
-    <div class="brand">
-      <div class="brand-icon">RM</div>
-      <div>
-        <h1>Real Market Signal Engine</h1>
-        <p>Rule-Based Technical Analysis</p>
-      </div>
-    </div>
-    <div class="connection">
-      <span id="statusDot" class="status-dot"></span>
-      <span id="connectionStatus">Connecting...</span>
-    </div>
-  </header>
+    <!-- HEADER -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">AS</div>
 
-  <main>
-
-    <section class="hero">
-      <div>
-        <span class="eyebrow">REAL MARKET ANALYSIS</span>
-        <h2>Trading Dashboard</h2>
-        <p>Live market data • Technical indicators • Rule-based signals</p>
-      </div>
-      <button id="scanButton" class="primary-button">
-        <span>↻</span> Analyze All Markets
-      </button>
-    </section>
-
-    <section class="stats-grid">
-      <div class="stat-card">
-        <span>Selected Market Price</span>
-        <strong id="marketPrice">--</strong>
-        <small id="selectedPairLabel">EUR/USD</small>
-      </div>
-      <div class="stat-card">
-        <span>Market Trend</span>
-        <strong id="marketTrend">--</strong>
-        <small>EMA 9 / EMA 21</small>
-      </div>
-      <div class="stat-card">
-        <span>Analysis Score</span>
-        <strong id="analysisScore">--</strong>
-        <small>Technical score, not win probability</small>
-      </div>
-      <div class="stat-card">
-        <span>Valid Markets</span>
-        <strong id="validMarkets">0/6</strong>
-        <small>Verified market data</small>
-      </div>
-    </section>
-
-    <section class="panel market-panel">
-      <div class="section-heading">
         <div>
-          <h3>Market Selection</h3>
-          <p>Choose a forex pair to inspect its analysis</p>
-        </div>
-        <span class="tag">1 MINUTE</span>
-      </div>
-
-      <div id="pairButtons" class="pair-grid">
-        <button class="pair-button active" data-pair="EUR/USD">EUR/USD</button>
-        <button class="pair-button" data-pair="GBP/USD">GBP/USD</button>
-        <button class="pair-button" data-pair="USD/JPY">USD/JPY</button>
-        <button class="pair-button" data-pair="AUD/USD">AUD/USD</button>
-        <button class="pair-button" data-pair="USD/CAD">USD/CAD</button>
-        <button class="pair-button" data-pair="EUR/GBP">EUR/GBP</button>
-      </div>
-    </section>
-
-    <section class="dashboard-grid">
-
-      <div class="panel">
-        <div class="section-heading">
-          <div>
-            <h3>Technical Indicators</h3>
-            <p>Calculated from closed market candles</p>
-          </div>
-          <span class="tag">LIVE DATA</span>
-        </div>
-
-        <div class="indicator-list">
-          <div class="indicator-row">
-            <span>RSI (14)</span>
-            <strong id="rsiValue">--</strong>
-            <span id="rsiStatus" class="indicator-status">Waiting</span>
-          </div>
-          <div class="indicator-row">
-            <span>EMA 9</span>
-            <strong id="ema9Value">--</strong>
-            <span class="indicator-status">Fast EMA</span>
-          </div>
-          <div class="indicator-row">
-            <span>EMA 21</span>
-            <strong id="ema21Value">--</strong>
-            <span class="indicator-status">Slow EMA</span>
-          </div>
-          <div class="indicator-row">
-            <span>MACD</span>
-            <strong id="macdValue">--</strong>
-            <span id="macdStatus" class="indicator-status">Waiting</span>
-          </div>
+          <h1>Auto Signal</h1>
+          <p>Real Market Analysis</p>
         </div>
       </div>
 
-      <div class="panel signal-panel">
-        <div class="section-heading">
-          <div>
-            <h3>Trading Signal</h3>
-            <p>Rule-based market decision</p>
-          </div>
-          <span class="tag">NO AI API</span>
+      <div class="connection-status" id="statusBadge">
+        <span class="status-dot"></span>
+        <span id="statusText">Connecting...</span>
+      </div>
+    </header>
+
+
+    <!-- MAIN DASHBOARD -->
+    <section class="dashboard">
+
+      <!-- SELECTED MARKET -->
+      <div class="info-card">
+        <div class="card-label">
+          Selected Market
         </div>
 
-        <div id="signalBox" class="signal-box waiting">
-          <span class="signal-label">CURRENT SIGNAL</span>
-          <strong id="signalValue">WAIT</strong>
-          <span id="signalPair">EUR/USD</span>
+        <div class="card-value" id="selectedMarket">
+          Waiting...
         </div>
 
-        <div class="signal-details">
-          <div>
-            <span>Technical Score</span>
-            <strong id="signalConfidence">--</strong>
-          </div>
-          <div>
-            <span>Signal Status</span>
-            <strong id="signalStatus">Waiting</strong>
-          </div>
-          <div>
-            <span>Expiry Reference</span>
-            <strong>1 Minute</strong>
-          </div>
-        </div>
-
-        <div class="reason-box">
-          <span>ANALYSIS REASON</span>
-          <p id="signalReason">Waiting for real market analysis.</p>
+        <div class="card-subtitle" id="marketSelectionStatus">
+          Automatically selected best market
         </div>
       </div>
 
-    </section>
 
-    <section class="panel chart-panel">
-      <div class="section-heading">
-        <div>
-          <h3>Market Candles</h3>
-          <p>Latest closed candle information</p>
+      <!-- MARKET PRICE -->
+      <div class="info-card">
+        <div class="card-label">
+          Market Price
         </div>
-        <span class="tag">OHLC</span>
-      </div>
 
-      <div class="candle-info">
-        <div><span>OPEN</span><strong id="candleOpen">--</strong></div>
-        <div><span>HIGH</span><strong id="candleHigh">--</strong></div>
-        <div><span>LOW</span><strong id="candleLow">--</strong></div>
-        <div><span>CLOSE</span><strong id="candleClose">--</strong></div>
-      </div>
-
-      <div id="candleTime" class="candle-time">
-        Waiting for candle data...
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="section-heading">
-        <div>
-          <h3>All Market Results</h3>
-          <p>Automatic analysis of six forex pairs</p>
+        <div class="card-value price-value" id="marketPrice">
+          --
         </div>
-        <span class="tag">6 PAIRS</span>
-      </div>
 
-      <div class="table-wrapper">
-        <table>
-          <thead>
-            <tr>
-              <th>PAIR</th>
-              <th>PRICE</th>
-              <th>TREND</th>
-              <th>RSI</th>
-              <th>SIGNAL</th>
-              <th>STATUS</th>
-            </tr>
-          </thead>
-          <tbody id="marketTable">
-            <tr>
-              <td colspan="6" class="empty-row">Waiting for market analysis...</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="section-heading">
-        <div>
-          <h3>System Information</h3>
-          <p>Backend and data connection</p>
+        <div class="card-subtitle" id="priceStatus">
+          Waiting for live market data
         </div>
       </div>
 
-      <div class="system-info">
-        <div>
-          <span>Backend</span>
-          <strong id="backendStatus">Checking...</strong>
+
+      <!-- SIGNAL -->
+      <div class="info-card signal-card">
+        <div class="card-label">
+          Signal
         </div>
-        <div>
-          <span>Market Data API</span>
-          <strong id="apiStatus">Checking...</strong>
+
+        <div class="signal-value wait" id="signal">
+          WAIT
         </div>
-        <div>
+
+        <div class="card-subtitle" id="signalSubtitle">
+          Waiting for market analysis
+        </div>
+      </div>
+
+
+      <!-- TECHNICAL SCORE -->
+      <div class="info-card">
+        <div class="card-label">
+          Technical Score
+        </div>
+
+        <div class="card-value" id="confidence">
+          --%
+        </div>
+
+        <div class="card-subtitle">
+          Technical score, not win probability
+        </div>
+      </div>
+
+
+      <!-- NEXT SIGNAL CHECK -->
+      <div class="info-card">
+        <div class="card-label">
+          Next Signal Check
+        </div>
+
+        <div class="card-value timer-value" id="nextSignalCheck">
+          --
+        </div>
+
+        <div class="card-subtitle">
+          Candle closing countdown
+        </div>
+      </div>
+
+
+      <!-- ANALYSIS MESSAGE -->
+      <div class="analysis-card">
+        <div class="analysis-heading">
+          Analysis Status
+        </div>
+
+        <div class="analysis-message" id="analysisReason">
+          Press Start Analysis to find the best market.
+        </div>
+
+        <div class="analysis-meta" id="analysisStatus">
+          System ready
+        </div>
+      </div>
+
+
+      <!-- BUTTONS -->
+      <div class="action-buttons">
+
+        <button
+          type="button"
+          class="start-button"
+          id="startAnalysis"
+        >
+          <span class="button-icon">▶</span>
+          START ANALYSIS
+        </button>
+
+        <button
+          type="button"
+          class="stop-button"
+          id="stopAnalysis"
+          disabled
+        >
+          <span class="button-icon">■</span>
+          STOP
+        </button>
+
+      </div>
+
+
+      <!-- SMALL INFORMATION -->
+      <div class="bottom-info">
+
+        <div class="info-row">
+          <span>Market Mode</span>
+          <strong>REAL MARKET</strong>
+        </div>
+
+        <div class="info-row">
+          <span>Timeframe</span>
+          <strong>1 MINUTE</strong>
+        </div>
+
+        <div class="info-row">
           <span>Analysis Engine</span>
-          <strong>Rule-Based JavaScript</strong>
+          <strong>Technical Analysis</strong>
         </div>
-        <div>
-          <span>AI API</span>
-          <strong>Not Used</strong>
-        </div>
-        <div>
-          <span>Last Analysis</span>
-          <strong id="lastAnalysis">--</strong>
-        </div>
-      </div>
-    </section>
 
-    <div id="messageBox" class="message-box">
-      Ready to analyze the real market.
-    </div>
+        <div class="info-row">
+          <span>Data Provider</span>
+          <strong>Twelve Data</strong>
+        </div>
+
+        <div class="info-row">
+          <span>Last Analysis</span>
+          <strong id="lastAnalysisTime">--</strong>
+        </div>
+
+      </div>
+
+
+      <!-- DISCLAIMER -->
+      <footer class="disclaimer">
+        <strong>Trading Risk Notice</strong>
+
+        <p>
+          Signals are based on technical market analysis
+          and are not guaranteed predictions. Always verify
+          market prices before trading. This system does not
+          place trades automatically.
+        </p>
+      </footer>
+
+    </section>
 
   </main>
 
-  <footer>
-    <p>Real Market Signal Engine</p>
-    <p>Signals are analytical estimates, not guaranteed predictions. Always verify prices and test before live trading.</p>
-  </footer>
+  <script src="script.js"></script>
 
-</div>
-
-<script src="script.js"></script>
 </body>
 </html>
