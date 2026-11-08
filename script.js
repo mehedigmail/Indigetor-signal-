@@ -1,4 +1,11 @@
-const API_BASE = "";
+const $ = id => document.getElementById(id);
+
+let running = false;
+let selectedPair = null;
+let countdownTimer = null;
+let nextCheckTimer = null;
+let requestController = null;
+let currentAnalysis = null;
 
 const PAIRS = [
   "EUR/USD",
@@ -9,402 +16,369 @@ const PAIRS = [
   "EUR/GBP"
 ];
 
-let selectedPair = "EUR/USD";
-let latestResults = [];
-let scanning = false;
+function setStatus(text, color = "yellow") {
+  $("statusText").textContent = text;
+  const dot = document.querySelector(".status-dot");
 
-const $ = id => document.getElementById(id);
-
-function setMessage(message) {
-  const box = $("messageBox");
-  if (box) box.textContent = message;
+  if (dot) {
+    dot.style.background =
+      color === "green" ? "#20d99a" :
+      color === "red" ? "#ff6178" : "#ffbd59";
+  }
 }
 
-function formatPrice(value, pair = selectedPair) {
-  if (
-    value === null ||
-    value === undefined ||
-    !Number.isFinite(Number(value))
-  ) {
+function setSignal(signal, subtitle = "") {
+  const el = $("signal");
+
+  el.textContent = signal || "WAIT";
+  el.className = "signal-value " +
+    (signal === "CALL" ? "call" :
+     signal === "PUT" ? "put" : "wait");
+
+  $("signalSubtitle").textContent = subtitle;
+}
+
+function formatPrice(value, pair) {
+  if (value == null || !Number.isFinite(Number(value))) {
     return "--";
   }
 
-  const digits = pair.includes("JPY") ? 3 : 6;
-
+  const digits = pair && pair.includes("JPY") ? 3 : 6;
   return Number(value).toFixed(digits);
 }
 
-function formatTime(value) {
-  if (!value) return "--";
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) return "--";
-
-  return date.toLocaleString();
+function formatTime(date) {
+  return new Date(date).toLocaleTimeString();
 }
 
-function signalClass(signal) {
-  if (signal === "CALL") return "call-text";
-  if (signal === "PUT") return "put-text";
-  return "wait-text";
-}
-
-function showSignal(result) {
-  const box = $("signalBox");
-
-  if (!box) return;
-
+function showAnalysis(result) {
   if (!result || result.dataStatus !== "VALID") {
-    box.className = "signal-box waiting";
-
-    $("signalValue").textContent = "WAIT";
-    $("signalPair").textContent = selectedPair;
-    $("signalConfidence").textContent = "--";
-    $("signalStatus").textContent = "Data unavailable";
-
-    $("signalReason").textContent =
-      result?.error || "Valid market data is not available.";
-
+    setSignal("WAIT", "Verified market data unavailable");
+    $("marketPrice").textContent = "--";
+    $("confidence").textContent = "--%";
+    $("analysisReason").textContent =
+      result?.reason || "Market data unavailable.";
+    $("priceStatus").textContent = "No verified price";
     return;
   }
 
-  const signal = result.signal || "WAIT";
+  selectedPair = result.pair;
+  currentAnalysis = result;
 
-  box.className =
-    "signal-box " +
-    (signal === "CALL"
-      ? "call"
-      : signal === "PUT"
-      ? "put"
-      : "waiting");
-
-  $("signalValue").textContent = signal;
-  $("signalPair").textContent = result.symbol;
-
-  $("signalConfidence").textContent =
-    result.confidence + "/100";
-
-  $("signalStatus").textContent =
-    signal === "WAIT" ? "No strong setup" : "Analyzed";
-
-  $("signalReason").textContent =
-    result.reason || "No reason supplied.";
+  $("selectedMarket").textContent = result.pair;
+  $("marketSelectionStatus").textContent =
+    "Automatically selected best market";
 
   $("marketPrice").textContent =
-    formatPrice(result.price, result.symbol);
+    formatPrice(result.price, result.pair);
 
-  $("marketTrend").textContent = result.trend || "--";
+  $("priceStatus").textContent =
+    "Last closed candle price";
 
-  $("analysisScore").textContent =
-    result.confidence + "/100";
+  setSignal(
+    result.signal,
+    result.signal === "WAIT"
+      ? "No strong trading setup"
+      : "Technical setup detected"
+  );
 
-  $("selectedPairLabel").textContent = result.symbol;
+  $("confidence").textContent =
+    result.technicalScore + "%";
 
-  const indicators = result.indicators || {};
+  $("analysisReason").textContent =
+    result.reason || "Analysis completed.";
 
-  $("rsiValue").textContent =
-    indicators.rsi ?? "--";
+  $("analysisStatus").textContent =
+    "Analysis completed successfully";
 
-  $("rsiStatus").textContent =
-    indicators.rsi > 70
-      ? "Overbought"
-      : indicators.rsi < 30
-      ? "Oversold"
-      : indicators.rsi !== undefined
-      ? "Normal range"
-      : "Waiting";
+  $("lastAnalysisTime").textContent =
+    formatTime(new Date());
 
-  $("ema9Value").textContent =
-    formatPrice(indicators.ema9, result.symbol);
-
-  $("ema21Value").textContent =
-    formatPrice(indicators.ema21, result.symbol);
-
-  $("macdValue").textContent =
-    indicators.macd ?? "--";
-
-  $("macdStatus").textContent =
-    indicators.macdTrend || "Waiting";
-
-  const candle = result.candle || {};
-
-  $("candleOpen").textContent =
-    formatPrice(candle.open, result.symbol);
-
-  $("candleHigh").textContent =
-    formatPrice(candle.high, result.symbol);
-
-  $("candleLow").textContent =
-    formatPrice(candle.low, result.symbol);
-
-  $("candleClose").textContent =
-    formatPrice(candle.close, result.symbol);
-
-  $("candleTime").textContent =
-    "Last closed candle: " + formatTime(result.candleTime);
-
-  $("lastAnalysis").textContent =
-    formatTime(result.analysisTime);
+  $("marketSelectionStatus").textContent =
+    "Automatically selected: " + result.pair;
 }
 
-function renderTable(results) {
-  const tbody = $("marketTable");
+function showError(message) {
+  setSignal("WAIT", "No verified signal available");
 
-  if (!tbody) return;
+  $("analysisReason").textContent = message;
+  $("analysisStatus").textContent = "Analysis unavailable";
+  $("marketPrice").textContent = "--";
+  $("confidence").textContent = "--%";
+  $("priceStatus").textContent = "Waiting for valid data";
+}
 
-  if (!Array.isArray(results) || results.length === 0) {
-    tbody.innerHTML = `
-      <tr>
-        <td colspan="6" class="empty-row">
-          No market results available.
-        </td>
-      </tr>
-    `;
-    return;
-  }
+async function apiRequest(url, body = null) {
+  requestController = new AbortController();
 
-  tbody.innerHTML = results.map(result => {
-    const valid = result.dataStatus === "VALID";
-    const signal = valid ? result.signal : "WAIT";
-    const indicators = result.indicators || {};
+  const timeout = setTimeout(
+    () => requestController.abort(),
+    180000
+  );
 
-    const symbol = PAIRS.includes(result.symbol)
-      ? result.symbol
-      : "--";
-
-    const status = valid ? "VALID" : "ERROR";
-
-    return `
-      <tr data-pair="${symbol}">
-        <td><strong>${symbol}</strong></td>
-        <td>${valid ? formatPrice(result.price, symbol) : "--"}</td>
-        <td>${valid ? result.trend : "--"}</td>
-        <td>${valid ? indicators.rsi ?? "--" : "--"}</td>
-        <td class="${signalClass(signal)}">${signal}</td>
-        <td>${status}</td>
-      </tr>
-    `;
-  }).join("");
-
-  tbody.querySelectorAll("tr[data-pair]").forEach(row => {
-    row.style.cursor = "pointer";
-
-    row.addEventListener("click", () => {
-      selectPair(row.dataset.pair);
+  try {
+    const response = await fetch(url, {
+      method: body ? "POST" : "GET",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: requestController.signal
     });
-  });
-}
-
-function updateValidMarkets(results) {
-  const valid = results.filter(
-    result => result.dataStatus === "VALID"
-  ).length;
-
-  $("validMarkets").textContent =
-    valid + "/" + PAIRS.length;
-}
-
-function selectPair(pair) {
-  if (!PAIRS.includes(pair)) return;
-
-  selectedPair = pair;
-
-  document.querySelectorAll(".pair-button").forEach(button => {
-    button.classList.toggle(
-      "active",
-      button.dataset.pair === pair
-    );
-  });
-
-  $("selectedPairLabel").textContent = pair;
-  $("signalPair").textContent = pair;
-
-  const result = latestResults.find(
-    item => item.symbol === pair
-  );
-
-  if (result) {
-    showSignal(result);
-  } else {
-    showSignal(null);
-    setMessage("No analysis available for " + pair + ".");
-  }
-}
-
-async function checkHealth() {
-  try {
-    const response = await fetch(
-      API_BASE + "/api/health",
-      { cache: "no-store" }
-    );
-
-    if (!response.ok) {
-      throw new Error("Backend HTTP " + response.status);
-    }
 
     const data = await response.json();
 
-    if (data.status !== "ok") {
-      throw new Error(data.message || "Backend is not ready");
+    if (!response.ok || data.success === false) {
+      throw new Error(data.message || "Server request failed.");
     }
 
-    $("connectionStatus").textContent = "Backend Connected";
-    $("statusDot").className = "status-dot online";
-    $("backendStatus").textContent = "Connected";
-
-    $("apiStatus").textContent =
-      data.twelveDataConfigured
-        ? "Configured"
-        : "API key missing";
-
-    if (!data.twelveDataConfigured) {
-      setMessage(
-        "Backend connected, but Twelve Data API key is missing."
-      );
-      return false;
-    }
-
-    setMessage(
-      "Backend and Twelve Data configuration verified."
-    );
-
-    return true;
-
-  } catch (error) {
-    $("connectionStatus").textContent = "Backend Offline";
-    $("statusDot").className = "status-dot offline";
-    $("backendStatus").textContent = "Disconnected";
-    $("apiStatus").textContent = "Unavailable";
-
-    setMessage(
-      "Backend connection error: " + error.message
-    );
-
-    return false;
+    return data;
+  } finally {
+    clearTimeout(timeout);
+    requestController = null;
   }
 }
 
-async function scanMarkets() {
-  if (scanning) return;
-
-  scanning = true;
-
-  const button = $("scanButton");
-
-  if (button) {
-    button.disabled = true;
-    button.textContent = "Analyzing markets...";
-  }
-
-  setMessage(
-    "Collecting and analyzing real market data..."
+// Select the strongest actual CALL/PUT result.
+// If no market qualifies, show WAIT instead.
+function chooseBestMarket(results) {
+  const valid = (results || []).filter(item =>
+    item.dataStatus === "VALID" &&
+    (item.signal === "CALL" || item.signal === "PUT")
   );
 
+  valid.sort((a, b) =>
+    b.technicalScore - a.technicalScore
+  );
+
+  return valid[0] || null;
+}
+
+async function startAnalysis() {
+  if (running) return;
+
+  running = true;
+
+  $("startAnalysis").disabled = true;
+  $("stopAnalysis").disabled = false;
+
+  selectedPair = null;
+  currentAnalysis = null;
+
+  $("selectedMarket").textContent = "Searching...";
+  $("marketPrice").textContent = "--";
+  $("confidence").textContent = "--%";
+
+  setSignal("WAIT", "Searching for the best market");
+  $("analysisReason").textContent =
+    "Checking available Forex markets one by one...";
+  $("analysisStatus").textContent = "Market scan running";
+
+  setStatus("Scanning markets");
+
   try {
-    const response = await fetch(
-      API_BASE + "/api/scan",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        cache: "no-store"
-      }
-    );
+    const data = await apiRequest("/api/scan", {});
 
-    const data = await response.json();
+    if (!running) return;
 
-    if (!response.ok || !data.success) {
-      throw new Error(
-        data.error || "Market scan failed"
-      );
+    const best = chooseBestMarket(data.results);
+
+    if (!best) {
+      selectedPair = null;
+
+      $("selectedMarket").textContent = "No suitable market";
+      $("marketSelectionStatus").textContent =
+        "No strong setup found";
+
+      setSignal("WAIT", "No CALL or PUT setup confirmed");
+
+      $("confidence").textContent = "--%";
+      $("marketPrice").textContent = "--";
+
+      const errors = (data.results || [])
+        .filter(item => item.dataStatus !== "VALID")
+        .map(item => item.pair + ": " + item.reason);
+
+      $("analysisReason").textContent =
+        errors.length
+          ? "No suitable signal. " + errors.join(" | ")
+          : "All verified markets are currently WAIT.";
+
+      $("analysisStatus").textContent =
+        `${data.validMarkets || 0} of 6 markets verified`;
+
+      setStatus("No trade setup", "yellow");
+      return;
     }
 
-    if (!Array.isArray(data.pairs)) {
-      throw new Error(
-        "Invalid scan response from backend"
-      );
-    }
+    showAnalysis(best);
 
-    latestResults = data.pairs;
+    setStatus("Best market selected", "green");
 
-    renderTable(latestResults);
-    updateValidMarkets(latestResults);
+    $("analysisStatus").textContent =
+      `Best setup selected from ${data.validMarkets} verified markets`;
 
-    const selectedResult = latestResults.find(
-      result => result.symbol === selectedPair
-    );
-
-    if (selectedResult) {
-      showSignal(selectedResult);
-    } else {
-      showSignal(null);
-    }
-
-    const valid = latestResults.filter(
-      result => result.dataStatus === "VALID"
-    ).length;
-
-    const signals = latestResults.filter(
-      result =>
-        result.dataStatus === "VALID" &&
-        result.signal !== "WAIT"
-    );
-
-    if (valid === 0) {
-      setMessage(
-        "No valid market data received. Check Twelve Data API limits and Render logs."
-      );
-    } else {
-      setMessage(
-        "Analysis complete. " +
-        valid + " of " + PAIRS.length +
-        " markets verified. " +
-        signals.length +
-        " active signal(s) found."
-      );
-    }
-
-    $("lastAnalysis").textContent =
-      formatTime(data.analysisTime);
+    scheduleNextCheck();
 
   } catch (error) {
-    setMessage("Analysis error: " + error.message);
+    if (!running) return;
+
+    showError(
+      error.name === "AbortError"
+        ? "Request timed out. Please try again."
+        : error.message
+    );
+
+    setStatus("Connection error", "red");
 
   } finally {
-    scanning = false;
-
-    if (button) {
-      button.disabled = false;
-      button.innerHTML =
-        "<span>↻</span> Analyze All Markets";
+    if (running) {
+      $("startAnalysis").disabled = false;
     }
   }
 }
 
-function setupPairButtons() {
-  document.querySelectorAll(".pair-button").forEach(button => {
-    button.addEventListener("click", () => {
-      selectPair(button.dataset.pair);
+// Recheck only the selected pair near candle close.
+async function recheckSelectedMarket() {
+  if (!running || !selectedPair) return;
+
+  const pairToCheck = selectedPair;
+
+  $("analysisStatus").textContent =
+    "Rechecking selected market...";
+
+  try {
+    const data = await apiRequest("/api/analyze", {
+      pair: pairToCheck
     });
-  });
-}
 
-async function initialize() {
-  setupPairButtons();
+    if (!running || selectedPair !== pairToCheck) return;
 
-  const connected = await checkHealth();
+    const result = data.result;
 
-  if (connected) {
-    await scanMarkets();
+    if (result && result.dataStatus === "VALID") {
+      showAnalysis(result);
+
+      if (result.signal === "WAIT") {
+        $("analysisReason").textContent =
+          "Selected market no longer has a strong setup. Start a new scan to find another market.";
+      }
+
+      setStatus("Market updated", "green");
+    } else {
+      showError("Selected market data is unavailable.");
+      setStatus("Data unavailable", "red");
+    }
+
+  } catch (error) {
+    if (!running) return;
+
+    $("analysisReason").textContent =
+      "Recheck failed: " + error.message;
+
+    $("analysisStatus").textContent =
+      "Waiting for next analysis cycle";
+
+    setSignal("WAIT", "Signal not verified");
+    setStatus("Recheck error", "red");
   }
 }
 
-const scanButton = $("scanButton");
+// Next candle's 50th second.
+function getSecondsUntilCheck() {
+  const now = new Date();
 
-if (scanButton) {
-  scanButton.addEventListener("click", scanMarkets);
+  const target = new Date(now);
+  target.setMinutes(now.getMinutes() + 1);
+  target.setSeconds(50, 0);
+
+  return Math.max(0, target.getTime() - now.getTime());
 }
 
-initialize();
+function updateCountdown() {
+  if (!running) return;
+
+  const now = new Date();
+  const remaining = getSecondsUntilCheck();
+
+  const totalSeconds = Math.ceil(remaining / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  $("nextSignalCheck").textContent =
+    String(minutes).padStart(2, "0") + ":" +
+    String(seconds).padStart(2, "0");
+}
+
+function scheduleNextCheck() {
+  clearInterval(countdownTimer);
+  clearTimeout(nextCheckTimer);
+
+  if (!running || !selectedPair) return;
+
+  updateCountdown();
+
+  countdownTimer = setInterval(updateCountdown, 250);
+
+  const delay = getSecondsUntilCheck();
+
+  nextCheckTimer = setTimeout(async () => {
+    if (!running) return;
+
+    await recheckSelectedMarket();
+
+    if (running && selectedPair) {
+      scheduleNextCheck();
+    }
+  }, delay);
+}
+
+function stopAnalysis() {
+  running = false;
+
+  clearInterval(countdownTimer);
+  clearTimeout(nextCheckTimer);
+
+  if (requestController) {
+    requestController.abort();
+  }
+
+  $("startAnalysis").disabled = false;
+  $("stopAnalysis").disabled = true;
+
+  $("analysisStatus").textContent = "Analysis stopped";
+  $("nextSignalCheck").textContent = "--";
+
+  setStatus("Stopped");
+}
+
+// Backend connection check
+async function checkHealth() {
+  try {
+    const data = await apiRequest("/api/health");
+
+    if (data.twelveDataConfigured) {
+      setStatus("Backend connected", "green");
+    } else {
+      setStatus("API key missing", "red");
+    }
+  } catch (error) {
+    setStatus("Backend disconnected", "red");
+  }
+}
+
+$("startAnalysis").addEventListener(
+  "click",
+  startAnalysis
+);
+
+$("stopAnalysis").addEventListener(
+  "click",
+  stopAnalysis
+);
+
+window.addEventListener("beforeunload", () => {
+  stopAnalysis();
+});
+
+checkHealth();
