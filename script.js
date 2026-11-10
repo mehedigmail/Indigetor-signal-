@@ -9,6 +9,10 @@ let currentAnalysis = null;
 
 let weakCount = 0;
 let errorCount = 0;
+let excludedPair = null;
+let scanBusy = false;
+
+const MIN_PAYOUT = 70;
 
 const PAIRS = [
   "EUR/USD",
@@ -37,7 +41,6 @@ function setSignal(signal, subtitle = "") {
 
   el.textContent = signal || "WAIT";
 
-  // Keep existing CSS classes.
   el.className = "signal-value " +
     (signal === "BUY" ? "call" :
      signal === "SELL" ? "put" : "wait");
@@ -59,8 +62,78 @@ function formatTime(date) {
   return new Date(date).toLocaleTimeString();
 }
 
+
 // -----------------------------
-// DISPLAY ANALYSIS
+// API REQUEST
+// -----------------------------
+
+async function apiRequest(url, body = null) {
+  const controller = new AbortController();
+  requestController = controller;
+
+  const timeout = setTimeout(
+    () => controller.abort(),
+    180000
+  );
+
+  try {
+    const response = await fetch(url, {
+      method: body ? "POST" : "GET",
+
+      headers: {
+        "Content-Type": "application/json"
+      },
+
+      body: body ? JSON.stringify(body) : undefined,
+
+      signal: controller.signal
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || data.success === false) {
+      const error = new Error(
+        data.message || "সার্ভারের সঙ্গে যোগাযোগ করা যায়নি।"
+      );
+
+      error.status = response.status;
+      error.data = data;
+
+      throw error;
+    }
+
+    return data;
+
+  } finally {
+    clearTimeout(timeout);
+
+    if (requestController === controller) {
+      requestController = null;
+    }
+  }
+}
+
+
+// -----------------------------
+// PAYOUT DISPLAY
+// -----------------------------
+
+function updatePayoutDisplay() {
+  $("payoutMarketLabel").textContent =
+    "Selected Market: " + (selectedPair || "Waiting...");
+
+  if (excludedPair) {
+    $("payoutStatus").textContent =
+      excludedPair + " বাদ দেওয়া হয়েছে। Reset না করা পর্যন্ত ফিরবে না।";
+  } else {
+    $("payoutStatus").textContent =
+      "৭০% বা তার বেশি Payout থাকা মার্কেট ব্যবহার করা হবে।";
+  }
+}
+
+
+// -----------------------------
+// SHOW ANALYSIS
 // -----------------------------
 
 function showAnalysis(result) {
@@ -73,7 +146,8 @@ function showAnalysis(result) {
     $("analysisReason").textContent =
       result?.reason || "বাজারের তথ্য পাওয়া যায়নি।";
 
-    $("priceStatus").textContent = "সঠিক তথ্যের অপেক্ষায়";
+    $("priceStatus").textContent =
+      "সঠিক তথ্যের অপেক্ষায়";
 
     return;
   }
@@ -115,7 +189,14 @@ function showAnalysis(result) {
 
   $("marketSelectionStatus").textContent =
     "স্বয়ংক্রিয়ভাবে নির্বাচিত: " + result.pair;
+
+  updatePayoutDisplay();
 }
+
+
+// -----------------------------
+// SHOW ERROR
+// -----------------------------
 
 function showError(message) {
   setSignal("WAIT", "সংকেত যাচাই করা যায়নি");
@@ -132,54 +213,15 @@ function showError(message) {
     "সঠিক তথ্যের অপেক্ষায়";
 }
 
-// -----------------------------
-// API REQUEST
-// -----------------------------
-
-async function apiRequest(url, body = null) {
-  requestController = new AbortController();
-
-  const timeout = setTimeout(
-    () => requestController?.abort(),
-    180000
-  );
-
-  try {
-    const response = await fetch(url, {
-      method: body ? "POST" : "GET",
-
-      headers: {
-        "Content-Type": "application/json"
-      },
-
-      body: body ? JSON.stringify(body) : undefined,
-
-      signal: requestController.signal
-    });
-
-    const data = await response.json();
-
-    if (!response.ok || data.success === false) {
-      throw new Error(
-        data.message || "সার্ভারের সঙ্গে যোগাযোগ করা যায়নি।"
-      );
-    }
-
-    return data;
-
-  } finally {
-    clearTimeout(timeout);
-    requestController = null;
-  }
-}
 
 // -----------------------------
-// BEST MARKET SELECTION
+// CHOOSE BEST MARKET
 // -----------------------------
 
 function chooseBestMarket(results) {
   const valid = (results || []).filter(item =>
     item.dataStatus === "VALID" &&
+    item.pair !== excludedPair &&
     (item.signal === "BUY" || item.signal === "SELL")
   );
 
@@ -190,18 +232,42 @@ function chooseBestMarket(results) {
   return valid[0] || null;
 }
 
+
 // -----------------------------
-// SCAN ALL SIX PAIRS
+// CLEAR SELECTED MARKET
+// -----------------------------
+
+function clearSelectedMarket(message) {
+  selectedPair = null;
+  currentAnalysis = null;
+
+  $("selectedMarket").textContent =
+    "কোনো উপযুক্ত মার্কেট নেই";
+
+  $("marketPrice").textContent = "--";
+  $("confidence").textContent = "--%";
+
+  $("marketSelectionStatus").textContent =
+    message;
+
+  setSignal("WAIT", "ভালো সুযোগের অপেক্ষা চলছে");
+}
+
+
+// -----------------------------
+// SCAN ALL MARKETS
 // -----------------------------
 
 async function scanAllMarkets() {
-  if (!running) return;
+  if (!running || scanBusy) return;
+
+  scanBusy = true;
 
   weakCount = 0;
   errorCount = 0;
 
   $("analysisStatus").textContent =
-    "ছয়টি মার্কেট পরীক্ষা করা হচ্ছে...";
+    "মার্কেট স্ক্যান করা হচ্ছে...";
 
   $("marketSelectionStatus").textContent =
     "সেরা সুযোগ খোঁজা হচ্ছে";
@@ -211,38 +277,32 @@ async function scanAllMarkets() {
   setStatus("Scanning markets");
 
   try {
-    const data = await apiRequest("/api/scan", {});
+    const data = await apiRequest("/api/scan");
 
     if (!running) return;
+
+    excludedPair = data.excludedPair || null;
 
     const best = chooseBestMarket(data.results);
 
     if (!best) {
-      selectedPair = null;
-      currentAnalysis = null;
-
-      $("selectedMarket").textContent =
-        "কোনো উপযুক্ত মার্কেট নেই";
-
-      $("marketSelectionStatus").textContent =
-        "সব পেয়ার পরীক্ষা করা হয়েছে";
-
-      $("marketPrice").textContent = "--";
-      $("confidence").textContent = "--%";
+      clearSelectedMarket(
+        "সব যোগ্য মার্কেট পরীক্ষা করা হয়েছে"
+      );
 
       const validCount = data.validMarkets || 0;
 
       $("analysisReason").textContent =
         validCount > 0
-          ? "সব মার্কেট পরীক্ষা করা হয়েছে, কিন্তু এখনো BUY বা SELL-এর উপযুক্ত সুযোগ নেই।"
-          : "যাচাইকৃত মার্কেট ডাটা পাওয়া যায়নি। কিছুক্ষণ পর আবার পরীক্ষা করা হবে।";
+          ? "এখন কোনো শক্তিশালী BUY বা SELL সুযোগ নেই। অপেক্ষা করুন।"
+          : "Payout যাচাই করুন এবং বাজারের তথ্যের অপেক্ষা করুন।";
 
       $("analysisStatus").textContent =
-        `${validCount} / 6 টি মার্কেটের তথ্য যাচাই হয়েছে`;
-
-      setSignal("WAIT", "ভালো সুযোগের অপেক্ষা চলছে");
+        `${validCount} টি যাচাইকৃত মার্কেট পাওয়া গেছে।`;
 
       setStatus("Waiting for opportunity", "yellow");
+
+      updatePayoutDisplay();
 
       scheduleNextCheck();
 
@@ -254,35 +314,32 @@ async function scanAllMarkets() {
     setStatus("Best market selected", "green");
 
     $("analysisStatus").textContent =
-      `${data.validMarkets} টি যাচাইকৃত মার্কেটের মধ্যে সেরা সুযোগ নির্বাচন করা হয়েছে`;
+      "সেরা উপযুক্ত মার্কেট নির্বাচন করা হয়েছে।";
 
     scheduleNextCheck();
 
   } catch (error) {
     if (!running) return;
 
-    showError(
-      error.name === "AbortError"
-        ? "অনুরোধের সময় শেষ হয়েছে। আবার চেষ্টা করা হবে।"
-        : error.message
-    );
+    showError(error.message);
 
     setStatus("Connection error", "red");
 
-    selectedPair = null;
-
     scheduleNextCheck();
+
+  } finally {
+    scanBusy = false;
   }
 }
 
+
 // -----------------------------
-// RECHECK SELECTED PAIR
+// RECHECK SELECTED MARKET
 // -----------------------------
 
 async function recheckSelectedMarket() {
   if (!running) return;
 
-  // If no pair is selected, scan all pairs again.
   if (!selectedPair) {
     await scanAllMarkets();
     return;
@@ -294,9 +351,10 @@ async function recheckSelectedMarket() {
     "নির্বাচিত মার্কেট আবার পরীক্ষা করা হচ্ছে...";
 
   try {
-    const data = await apiRequest("/api/analyze", {
-      pair: pairToCheck
-    });
+    const data = await apiRequest(
+      "/api/analyze?pair=" +
+      encodeURIComponent(pairToCheck)
+    );
 
     if (!running || selectedPair !== pairToCheck) return;
 
@@ -319,7 +377,7 @@ async function recheckSelectedMarket() {
       setStatus("Market signal verified", "green");
 
       $("analysisStatus").textContent =
-        "নির্বাচিত মার্কেটে নতুন সংকেত যাচাই হয়েছে";
+        "নির্বাচিত মার্কেটে সংকেত যাচাই হয়েছে";
 
     } else {
       weakCount++;
@@ -333,12 +391,7 @@ async function recheckSelectedMarket() {
         result.reason +
         " অন্য মার্কেটের সুযোগও পরীক্ষা করা হবে।";
 
-      // After two consecutive weak checks,
-      // search all six markets again.
       if (weakCount >= 2) {
-        $("analysisStatus").textContent =
-          "নির্বাচিত মার্কেট দুর্বল। নতুন মার্কেট খোঁজা হচ্ছে...";
-
         await scanAllMarkets();
         return;
       }
@@ -349,6 +402,13 @@ async function recheckSelectedMarket() {
 
     errorCount++;
     weakCount++;
+
+    if (error.status === 403) {
+      showError(error.message);
+
+      await scanAllMarkets();
+      return;
+    }
 
     setSignal("WAIT", "সংকেত যাচাই করা যায়নি");
 
@@ -371,8 +431,134 @@ async function recheckSelectedMarket() {
   }
 }
 
+
 // -----------------------------
-// NEXT CHECK COUNTDOWN
+// PAYOUT SAVE BUTTON
+// -----------------------------
+
+async function savePayout() {
+  const pair = selectedPair;
+
+  if (!pair) {
+    $("payoutStatus").textContent =
+      "প্রথমে একটি মার্কেট সিলেক্ট হতে দিন।";
+
+    return;
+  }
+
+  const input = $("payoutInput");
+  const payout = Number(input.value);
+
+  if (
+    input.value.trim() === "" ||
+    !Number.isFinite(payout) ||
+    payout < 0 ||
+    payout > 100
+  ) {
+    $("payoutStatus").textContent =
+      "সঠিক Payout শতাংশ লিখুন (০–১০০)।";
+
+    return;
+  }
+
+  $("setPayoutButton").disabled = true;
+
+  try {
+    const data = await apiRequest("/api/payout", {
+      pair,
+      payout
+    });
+
+    excludedPair = data.excludedPair || null;
+
+    $("payoutStatus").textContent =
+      data.message;
+
+    input.value = "";
+
+    if (excludedPair === pair) {
+      clearSelectedMarket(
+        pair + " কম Payout-এর কারণে বাদ দেওয়া হয়েছে"
+      );
+
+      $("analysisReason").textContent =
+        pair + " এর Payout " + payout +
+        "%। তাই এই মার্কেট বাদ দিয়ে অন্য মার্কেট খোঁজা হচ্ছে।";
+    }
+
+    updatePayoutDisplay();
+
+    if (running) {
+      await scanAllMarkets();
+    }
+
+  } catch (error) {
+    $("payoutStatus").textContent =
+      error.message;
+
+  } finally {
+    $("setPayoutButton").disabled = false;
+  }
+}
+
+
+// -----------------------------
+// RESET MARKETS BUTTON
+// -----------------------------
+
+async function resetMarkets() {
+  const button = $("resetExcludedButton");
+
+  button.disabled = true;
+
+  try {
+    const data = await apiRequest(
+      "/api/reset-markets",
+      {}
+    );
+
+    excludedPair = null;
+
+    selectedPair = null;
+    currentAnalysis = null;
+
+    $("payoutInput").value = "";
+
+    $("payoutStatus").textContent =
+      data.message;
+
+    $("selectedMarket").textContent =
+      "Waiting...";
+
+    $("marketPrice").textContent = "--";
+    $("confidence").textContent = "--%";
+
+    setSignal("WAIT", "Payout যাচাইয়ের অপেক্ষায়");
+
+    $("analysisReason").textContent =
+      "সব ছয়টি মার্কেট ফিরেছে। এখন Quotex দেখে প্রতিটি মার্কেটের Payout লিখুন।";
+
+    $("analysisStatus").textContent =
+      "সব মার্কেট Reset হয়েছে";
+
+    updatePayoutDisplay();
+
+    if (running) {
+      await scanAllMarkets();
+    }
+
+  } catch (error) {
+    $("payoutStatus").textContent =
+      error.message;
+
+  } finally {
+    button.disabled = false;
+  }
+}
+
+
+// -----------------------------
+// COUNTDOWN
 // -----------------------------
 
 function getSecondsUntilCheck() {
@@ -430,6 +616,7 @@ function scheduleNextCheck() {
   }, delay);
 }
 
+
 // -----------------------------
 // START
 // -----------------------------
@@ -467,6 +654,7 @@ async function startAnalysis() {
   }
 }
 
+
 // -----------------------------
 // STOP
 // -----------------------------
@@ -492,6 +680,7 @@ function stopAnalysis() {
   setStatus("Stopped");
 }
 
+
 // -----------------------------
 // BACKEND HEALTH
 // -----------------------------
@@ -500,16 +689,21 @@ async function checkHealth() {
   try {
     const data = await apiRequest("/api/health");
 
+    excludedPair = data.excludedPair || null;
+
     if (data.twelveDataConfigured) {
       setStatus("Backend connected", "green");
     } else {
       setStatus("API key missing", "red");
     }
 
+    updatePayoutDisplay();
+
   } catch (error) {
     setStatus("Backend disconnected", "red");
   }
 }
+
 
 // -----------------------------
 // BUTTON EVENTS
@@ -525,9 +719,24 @@ $("stopAnalysis").addEventListener(
   stopAnalysis
 );
 
+$("setPayoutButton").addEventListener(
+  "click",
+  savePayout
+);
+
+$("resetExcludedButton").addEventListener(
+  "click",
+  resetMarkets
+);
+
 window.addEventListener("beforeunload", () => {
   stopAnalysis();
 });
 
-// Initial connection check
+
+// -----------------------------
+// INITIAL CONNECTION
+// -----------------------------
+
+updatePayoutDisplay();
 checkHealth();
