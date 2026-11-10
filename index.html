@@ -156,6 +156,53 @@
       </div>
 
 
+      <!-- PAYOUT CONTROL -->
+      <div class="analysis-card" id="payoutControl">
+        <div class="analysis-heading">
+          Market Payout Control
+        </div>
+
+        <div class="analysis-message" id="payoutMarketLabel">
+          Selected Market: Waiting...
+        </div>
+
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px;">
+          <input
+            type="number"
+            id="payoutInput"
+            min="0"
+            max="100"
+            step="1"
+            placeholder="Payout %"
+            inputmode="decimal"
+            style="flex:1;min-width:100px;padding:12px;border-radius:8px;border:1px solid #344158;background:#080D18;color:#ffffff;font-size:16px;"
+          >
+
+          <button
+            type="button"
+            id="setPayoutButton"
+            class="start-button"
+            style="padding:12px;"
+          >
+            SAVE PAYOUT
+          </button>
+        </div>
+
+        <button
+          type="button"
+          id="resetExcludedButton"
+          class="stop-button"
+          style="width:100%;margin-top:10px;padding:12px;"
+        >
+          RESET MARKETS
+        </button>
+
+        <div class="analysis-meta" id="payoutStatus" style="margin-top:10px;">
+          70% বা তার বেশি Payout থাকা মার্কেট ব্যবহার করা হবে।
+        </div>
+      </div>
+
+
       <!-- SMALL INFORMATION -->
       <div class="bottom-info">
 
