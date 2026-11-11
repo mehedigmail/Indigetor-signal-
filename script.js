@@ -79,13 +79,10 @@ async function apiRequest(url, body = null) {
   try {
     const response = await fetch(url, {
       method: body ? "POST" : "GET",
-
       headers: {
         "Content-Type": "application/json"
       },
-
       body: body ? JSON.stringify(body) : undefined,
-
       signal: controller.signal
     });
 
@@ -124,11 +121,49 @@ function updatePayoutDisplay() {
 
   if (excludedPair) {
     $("payoutStatus").textContent =
-      excludedPair + " বাদ দেওয়া হয়েছে। Reset না করা পর্যন্ত ফিরবে না।";
+      excludedPair +
+      " বাদ দেওয়া হয়েছে। Reset না করা পর্যন্ত ফিরবে না।";
   } else {
     $("payoutStatus").textContent =
       "৭০% বা তার বেশি Payout থাকা মার্কেট ব্যবহার করা হবে।";
   }
+}
+
+
+// -----------------------------
+// PAYOUT REQUIRED
+// -----------------------------
+
+function showPayoutRequired(result) {
+  selectedPair = result.pair;
+  currentAnalysis = result;
+
+  $("selectedMarket").textContent = result.pair;
+
+  $("marketPrice").textContent =
+    formatPrice(result.price, result.pair);
+
+  $("priceStatus").textContent =
+    "শেষ সম্পন্ন ক্যান্ডেলের দাম";
+
+  $("confidence").textContent = "--%";
+
+  setSignal(
+    "WAIT",
+    "সিগন্যালের আগে Payout যাচাই করুন"
+  );
+
+  $("analysisReason").textContent =
+    result.pair +
+    " এর Quotex Payout এখনো দেওয়া হয়নি। Quotex দেখে Payout লিখে SAVE PAYOUT চাপুন।";
+
+  $("analysisStatus").textContent =
+    "Payout যাচাই প্রয়োজন";
+
+  $("marketSelectionStatus").textContent =
+    "Payout যাচাইয়ের জন্য নির্বাচিত: " + result.pair;
+
+  updatePayoutDisplay();
 }
 
 
@@ -154,6 +189,24 @@ function showAnalysis(result) {
 
   selectedPair = result.pair;
   currentAnalysis = result;
+
+  // Payout না থাকলে কোনো BUY/SELL দেখানো যাবে না।
+  if (
+    result.payoutRequired === true ||
+    result.payout == null
+  ) {
+    showPayoutRequired(result);
+    return;
+  }
+
+  if (Number(result.payout) < MIN_PAYOUT) {
+    setSignal("WAIT", "Payout ৭০%-এর কম");
+
+    $("analysisReason").textContent =
+      "এই মার্কেটের Payout ৭০%-এর কম।";
+
+    return;
+  }
 
   $("selectedMarket").textContent = result.pair;
 
@@ -251,6 +304,8 @@ function clearSelectedMarket(message) {
     message;
 
   setSignal("WAIT", "ভালো সুযোগের অপেক্ষা চলছে");
+
+  updatePayoutDisplay();
 }
 
 
@@ -302,7 +357,22 @@ async function scanAllMarkets() {
 
       setStatus("Waiting for opportunity", "yellow");
 
-      updatePayoutDisplay();
+      scheduleNextCheck();
+
+      return;
+    }
+
+    // Payout অজানা হলে শুধু WAIT দেখাবে।
+    if (
+      best.payoutRequired === true ||
+      best.payout == null
+    ) {
+      showPayoutRequired(best);
+
+      setStatus("Payout required", "yellow");
+
+      $("analysisStatus").textContent =
+        "সিগন্যালের আগে এই মার্কেটের Payout লিখুন।";
 
       scheduleNextCheck();
 
@@ -345,6 +415,16 @@ async function recheckSelectedMarket() {
     return;
   }
 
+  // Payout না দেওয়া পর্যন্ত /api/analyze কল নয়।
+  if (
+    !currentAnalysis ||
+    currentAnalysis.payoutRequired === true ||
+    currentAnalysis.payout == null
+  ) {
+    await scanAllMarkets();
+    return;
+  }
+
   const pairToCheck = selectedPair;
 
   $("analysisStatus").textContent =
@@ -362,6 +442,15 @@ async function recheckSelectedMarket() {
 
     if (!result || result.dataStatus !== "VALID") {
       throw new Error("যাচাইকৃত তথ্য পাওয়া যায়নি।");
+    }
+
+    if (
+      result.payoutRequired === true ||
+      result.payout == null ||
+      Number(result.payout) < MIN_PAYOUT
+    ) {
+      await scanAllMarkets();
+      return;
     }
 
     errorCount = 0;
@@ -490,6 +579,11 @@ async function savePayout() {
 
     if (running) {
       await scanAllMarkets();
+    } else {
+      $("analysisStatus").textContent =
+        payout >= MIN_PAYOUT
+          ? "Payout সংরক্ষিত। Start Analysis চাপুন।"
+          : "কম Payout-এর মার্কেট বাদ দেওয়া হয়েছে।";
     }
 
   } catch (error) {
@@ -536,7 +630,7 @@ async function resetMarkets() {
     setSignal("WAIT", "Payout যাচাইয়ের অপেক্ষায়");
 
     $("analysisReason").textContent =
-      "সব ছয়টি মার্কেট ফিরেছে। এখন Quotex দেখে প্রতিটি মার্কেটের Payout লিখুন।";
+      "সব ছয়টি মার্কেট ফিরেছে। Quotex দেখে Payout যাচাই করুন।";
 
     $("analysisStatus").textContent =
       "সব মার্কেট Reset হয়েছে";
