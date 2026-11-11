@@ -10,7 +10,7 @@ app.use(express.json());
 app.use(express.static(__dirname));
 
 const PORT = process.env.PORT || 3000;
-const TWELVE_DATA_API_KEY = process.env.TWELVE_DATA_API_KEY;
+const API_KEY = process.env.TWELVE_DATA_API_KEY;
 
 const PAIRS = [
   "EUR/USD",
@@ -22,67 +22,42 @@ const PAIRS = [
 ];
 
 const MIN_PAYOUT = 70;
-
-const PAYOUTS = {
-  "EUR/USD": null,
-  "GBP/USD": null,
-  "USD/JPY": null,
-  "AUD/USD": null,
-  "USD/CAD": null,
-  "EUR/GBP": null
-};
-
-// একবারে শুধু একটি মার্কেট বাদ থাকবে।
-let excludedPair = null;
-
 const INTERVAL = "1min";
 const OUTPUT_SIZE = 250;
 const CACHE_TTL = 45000;
 const REQUEST_GAP = Number(process.env.REQUEST_GAP_MS || 8000);
 
-const cache = new Map();
+const PAYOUTS = Object.fromEntries(PAIRS.map(p => [p, null]));
 
-let lastRequestAt = 0;
-let requestQueue = Promise.resolve();
+let excludedPair = null;
 let lastScan = null;
 let scanInProgress = false;
+let lastRequestAt = 0;
+let requestQueue = Promise.resolve();
 
-
-// -----------------------------
-// BASIC FUNCTIONS
-// -----------------------------
-
-function getPayout(pair) {
-  const value = PAYOUTS[pair];
-
-  if (
-    value === null ||
-    value === undefined ||
-    value === "" ||
-    !Number.isFinite(Number(value))
-  ) {
-    return null;
-  }
-
-  return Number(value);
-}
+const cache = new Map();
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function getPayout(pair) {
+  const value = PAYOUTS[pair];
+  return value === null || value === undefined
+    ? null
+    : Number(value);
+}
+
 
 // -----------------------------
-// TWELVE DATA REQUEST QUEUE
+// TWELVE DATA REQUEST
 // -----------------------------
 
 function queuedFetch(url) {
   const task = requestQueue.then(async () => {
     const wait = REQUEST_GAP - (Date.now() - lastRequestAt);
 
-    if (wait > 0) {
-      await sleep(wait);
-    }
+    if (wait > 0) await sleep(wait);
 
     lastRequestAt = Date.now();
 
@@ -94,23 +69,17 @@ function queuedFetch(url) {
       response = await fetch(url);
     }
 
-    if (!response.ok) {
-      const error = new Error(
-        `Twelve Data HTTP Error: ${response.status}`
-      );
-
-      error.status = response.status;
-      throw error;
-    }
-
     const data = await response.json();
 
-    if (data.status === "error" || data.code) {
+    if (!response.ok || data.status === "error" || data.code) {
       const error = new Error(
-        data.message || "Twelve Data API Error"
+        data.message || `Twelve Data Error: ${response.status}`
       );
 
-      error.status = data.code === 429 ? 429 : 400;
+      error.status = data.code === 429 || response.status === 429
+        ? 429
+        : response.status;
+
       throw error;
     }
 
@@ -118,17 +87,16 @@ function queuedFetch(url) {
   });
 
   requestQueue = task.catch(() => {});
-
   return task;
 }
 
 
 // -----------------------------
-// FETCH MARKET CANDLES
+// MARKET DATA
 // -----------------------------
 
 async function getMarketData(pair, force = false) {
-  if (!TWELVE_DATA_API_KEY) {
+  if (!API_KEY) {
     throw new Error("Twelve Data API Key সেট করা নেই।");
   }
 
@@ -148,12 +116,12 @@ async function getMarketData(pair, force = false) {
     `&interval=${INTERVAL}` +
     `&outputsize=${OUTPUT_SIZE}` +
     `&timezone=UTC` +
-    `&apikey=${encodeURIComponent(TWELVE_DATA_API_KEY)}`;
+    `&apikey=${encodeURIComponent(API_KEY)}`;
 
   const data = await queuedFetch(url);
 
-  if (!Array.isArray(data.values) || data.values.length < 60) {
-    throw new Error("পর্যাপ্ত ক্যান্ডেল ডাটা পাওয়া যায়নি।");
+  if (!Array.isArray(data.values)) {
+    throw new Error("Twelve Data থেকে ক্যান্ডেল পাওয়া যায়নি।");
   }
 
   const now = Date.now();
@@ -177,7 +145,7 @@ async function getMarketData(pair, force = false) {
     .sort((a, b) => a.time - b.time);
 
   if (candles.length < 60) {
-    throw new Error("বন্ধ হওয়া ক্যান্ডেল পর্যাপ্ত নেই।");
+    throw new Error("পর্যাপ্ত বন্ধ ক্যান্ডেল পাওয়া যায়নি।");
   }
 
   const latest = candles[candles.length - 1];
@@ -196,7 +164,7 @@ async function getMarketData(pair, force = false) {
 
 
 // -----------------------------
-// EMA
+// INDICATORS
 // -----------------------------
 
 function calculateEMA(values, period) {
@@ -206,7 +174,7 @@ function calculateEMA(values, period) {
 
   let ema = values
     .slice(0, period)
-    .reduce((sum, value) => sum + value, 0) / period;
+    .reduce((a, b) => a + b, 0) / period;
 
   for (let i = period; i < values.length; i++) {
     ema = (values[i] - ema) * multiplier + ema;
@@ -215,112 +183,70 @@ function calculateEMA(values, period) {
   return ema;
 }
 
-
-// -----------------------------
-// RSI
-// -----------------------------
-
 function calculateRSI(candles, period = 14) {
   if (candles.length < period + 1) return null;
 
   let gains = 0;
   let losses = 0;
 
-  const start = candles.length - period;
+  for (let i = candles.length - period; i < candles.length; i++) {
+    const change = candles[i].close - candles[i - 1].close;
 
-  for (let i = start; i < candles.length; i++) {
-    const change =
-      candles[i].close - candles[i - 1].close;
-
-    if (change > 0) {
-      gains += change;
-    } else {
-      losses += Math.abs(change);
-    }
+    if (change > 0) gains += change;
+    else losses += Math.abs(change);
   }
 
-  const avgGain = gains / period;
-  const avgLoss = losses / period;
+  if (losses === 0) return 100;
 
-  if (avgLoss === 0) return 100;
-
-  const rs = avgGain / avgLoss;
+  const rs = (gains / period) / (losses / period);
 
   return 100 - 100 / (1 + rs);
 }
-
-
-// -----------------------------
-// MACD
-// -----------------------------
 
 function calculateMACD(values) {
   if (values.length < 35) return null;
 
   const macdValues = [];
 
-  for (let i = 0; i < values.length; i++) {
-    if (i < 25) continue;
+  for (let i = 25; i < values.length; i++) {
+    const slice = values.slice(0, i + 1);
 
-    const shortEMA = calculateEMA(
-      values.slice(0, i + 1),
-      12
-    );
-
-    const longEMA = calculateEMA(
-      values.slice(0, i + 1),
-      26
-    );
+    const shortEMA = calculateEMA(slice, 12);
+    const longEMA = calculateEMA(slice, 26);
 
     macdValues.push(shortEMA - longEMA);
   }
 
   if (macdValues.length < 9) return null;
 
-  const macd = macdValues[macdValues.length - 1];
+  const value = macdValues[macdValues.length - 1];
   const signal = calculateEMA(macdValues, 9);
 
   return {
-    value: macd,
+    value,
     signal,
-    histogram: macd - signal
+    histogram: value - signal
   };
 }
-
-
-// -----------------------------
-// ATR
-// -----------------------------
 
 function calculateATR(candles, period = 14) {
   if (candles.length < period + 1) return null;
 
   const trs = [];
 
-  for (
-    let i = candles.length - period;
-    i < candles.length;
-    i++
-  ) {
+  for (let i = candles.length - period; i < candles.length; i++) {
     const current = candles[i];
     const previous = candles[i - 1];
 
-    trs.push(
-      Math.max(
-        current.high - current.low,
-        Math.abs(current.high - previous.close),
-        Math.abs(current.low - previous.close)
-      )
-    );
+    trs.push(Math.max(
+      current.high - current.low,
+      Math.abs(current.high - previous.close),
+      Math.abs(current.low - previous.close)
+    ));
   }
 
   return trs.reduce((a, b) => a + b, 0) / period;
 }
-
-
-// -----------------------------
-// ADX
-// -----------------------------
 
 function calculateADX(candles, period = 14) {
   if (candles.length < period * 2 + 1) return null;
@@ -330,82 +256,59 @@ function calculateADX(candles, period = 14) {
   const minusDM = [];
 
   for (let i = 1; i < candles.length; i++) {
-    const current = candles[i];
-    const previous = candles[i - 1];
+    const c = candles[i];
+    const p = candles[i - 1];
 
-    const upMove = current.high - previous.high;
-    const downMove = previous.low - current.low;
+    const up = c.high - p.high;
+    const down = p.low - c.low;
 
-    plusDM.push(
-      upMove > downMove && upMove > 0 ? upMove : 0
-    );
+    plusDM.push(up > down && up > 0 ? up : 0);
+    minusDM.push(down > up && down > 0 ? down : 0);
 
-    minusDM.push(
-      downMove > upMove && downMove > 0 ? downMove : 0
-    );
-
-    trs.push(
-      Math.max(
-        current.high - current.low,
-        Math.abs(current.high - previous.close),
-        Math.abs(current.low - previous.close)
-      )
-    );
+    trs.push(Math.max(
+      c.high - c.low,
+      Math.abs(c.high - p.close),
+      Math.abs(c.low - p.close)
+    ));
   }
 
-  const dxValues = [];
+  const dx = [];
 
   for (let i = period - 1; i < trs.length; i++) {
     const start = i - period + 1;
 
-    const trSum = trs
-      .slice(start, i + 1)
-      .reduce((a, b) => a + b, 0);
+    const tr = trs.slice(start, i + 1).reduce((a, b) => a + b, 0);
+    const plus = plusDM.slice(start, i + 1).reduce((a, b) => a + b, 0);
+    const minus = minusDM.slice(start, i + 1).reduce((a, b) => a + b, 0);
 
-    const plusSum = plusDM
-      .slice(start, i + 1)
-      .reduce((a, b) => a + b, 0);
+    if (tr === 0) continue;
 
-    const minusSum = minusDM
-      .slice(start, i + 1)
-      .reduce((a, b) => a + b, 0);
-
-    if (trSum === 0) continue;
-
-    const plusDI = 100 * plusSum / trSum;
-    const minusDI = 100 * minusSum / trSum;
-
+    const plusDI = 100 * plus / tr;
+    const minusDI = 100 * minus / tr;
     const denominator = plusDI + minusDI;
 
     if (denominator === 0) continue;
 
-    dxValues.push(
-      100 * Math.abs(plusDI - minusDI) / denominator
-    );
+    dx.push(100 * Math.abs(plusDI - minusDI) / denominator);
   }
 
-  if (dxValues.length < period) return null;
+  if (dx.length < period) return null;
 
-  return dxValues
-    .slice(-period)
-    .reduce((a, b) => a + b, 0) / period;
+  return dx.slice(-period).reduce((a, b) => a + b, 0) / period;
 }
 
 
 // -----------------------------
-// BUILD 5-MINUTE CANDLES
+// FIVE MINUTE TREND
 // -----------------------------
 
 function buildFiveMinuteCandles(candles) {
   const groups = new Map();
 
   for (const candle of candles) {
-    const bucket =
-      Math.floor(candle.time / 300000) * 300000;
+    const bucket = Math.floor(candle.time / 300000) * 300000;
 
-    if (!groups.has(bucket)) {
-      groups.set(bucket, []);
-    }
+    if (!groups.has(bucket)) groups.set(bucket, []);
 
     groups.get(bucket).push(candle);
   }
@@ -420,9 +323,7 @@ function buildFiveMinuteCandles(candles) {
     let consecutive = true;
 
     for (let i = 1; i < group.length; i++) {
-      if (
-        group[i].time - group[i - 1].time !== 60000
-      ) {
+      if (group[i].time - group[i - 1].time !== 60000) {
         consecutive = false;
         break;
       }
@@ -444,7 +345,7 @@ function buildFiveMinuteCandles(candles) {
 
 
 // -----------------------------
-// ANALYZE ONE MARKET
+// MARKET ANALYSIS
 // -----------------------------
 
 function analyzeCandles(pair, candles) {
@@ -453,43 +354,33 @@ function analyzeCandles(pair, candles) {
 
   const ema9 = calculateEMA(closes, 9);
   const ema21 = calculateEMA(closes, 21);
-  const rsi = calculateRSI(candles, 14);
+  const rsi = calculateRSI(candles);
   const macd = calculateMACD(closes);
-  const atr = calculateATR(candles, 14);
-  const adx = calculateADX(candles, 14);
+  const atr = calculateATR(candles);
+  const adx = calculateADX(candles);
 
-  const fiveCandles =
-    buildFiveMinuteCandles(candles);
-
-  const fiveCloses =
-    fiveCandles.map(c => c.close);
+  const fiveCandles = buildFiveMinuteCandles(candles);
+  const fiveCloses = fiveCandles.map(c => c.close);
 
   const fiveEMA9 = calculateEMA(fiveCloses, 9);
   const fiveEMA21 = calculateEMA(fiveCloses, 21);
 
   if (
-    ema9 === null ||
-    ema21 === null ||
-    rsi === null ||
-    !macd ||
-    atr === null ||
-    adx === null ||
-    fiveEMA9 === null ||
-    fiveEMA21 === null
+    ema9 === null || ema21 === null ||
+    rsi === null || !macd ||
+    atr === null || adx === null
   ) {
     throw new Error("ইন্ডিকেটর হিসাব করার মতো ডাটা নেই।");
   }
 
-  const support = Math.min(
-    ...candles.slice(-30).map(c => c.low)
-  );
+  const higherTrendBuy =
+    fiveEMA9 !== null && fiveEMA21 !== null && fiveEMA9 > fiveEMA21;
 
-  const resistance = Math.max(
-    ...candles.slice(-30).map(c => c.high)
-  );
+  const higherTrendSell =
+    fiveEMA9 !== null && fiveEMA21 !== null && fiveEMA9 < fiveEMA21;
 
-  const higherTrendBuy = fiveEMA9 > fiveEMA21;
-  const higherTrendSell = fiveEMA9 < fiveEMA21;
+  const support = Math.min(...candles.slice(-30).map(c => c.low));
+  const resistance = Math.max(...candles.slice(-30).map(c => c.high));
 
   const emaBuy = ema9 > ema21;
   const emaSell = ema9 < ema21;
@@ -500,11 +391,8 @@ function analyzeCandles(pair, candles) {
   const candleBuy = last.close > last.open;
   const candleSell = last.close < last.open;
 
-  const buyHasRoom =
-    resistance - last.close > atr * 1.2;
-
-  const sellHasRoom =
-    last.close - support > atr * 1.2;
+  const buyHasRoom = resistance - last.close > atr * 0.5;
+  const sellHasRoom = last.close - support > atr * 0.5;
 
   let buyScore = 0;
   let sellScore = 0;
@@ -515,16 +403,16 @@ function analyzeCandles(pair, candles) {
   if (macdBuy) buyScore += 2;
   if (macdSell) sellScore += 2;
 
-  if (rsi >= 50 && rsi <= 65) buyScore += 1;
-  if (rsi >= 35 && rsi <= 50) sellScore += 1;
+  if (rsi >= 50 && rsi <= 68) buyScore += 1;
+  if (rsi >= 32 && rsi <= 50) sellScore += 1;
 
   if (candleBuy) buyScore += 1;
   if (candleSell) sellScore += 1;
 
-  if (higherTrendBuy) buyScore += 2;
-  if (higherTrendSell) sellScore += 2;
+  if (higherTrendBuy) buyScore += 1;
+  if (higherTrendSell) sellScore += 1;
 
-  if (adx >= 18) {
+  if (adx >= 14) {
     buyScore += 1;
     sellScore += 1;
   }
@@ -533,43 +421,42 @@ function analyzeCandles(pair, candles) {
   if (sellHasRoom) sellScore += 1;
 
   let signal = "WAIT";
-  let reason =
-    "শক্তিশালী সেটআপ পাওয়া যায়নি। অপেক্ষা করুন।";
+  let reason = "এখনো যথেষ্ট শক্তিশালী সেটআপ নেই।";
 
+  // আগের তুলনায় কিছুটা নমনীয় BUY শর্ত
   if (
-    adx >= 18 &&
-    buyScore >= 8 &&
+    adx >= 14 &&
+    buyScore >= 6 &&
     buyScore - sellScore >= 2 &&
-    higherTrendBuy &&
+    emaBuy &&
+    macdBuy &&
+    rsi >= 50 &&
+    rsi <= 68 &&
+    candleBuy &&
     buyHasRoom &&
-    ema9 > ema21 &&
-    macd.histogram > 0 &&
-    rsi >= 52 &&
-    rsi <= 65 &&
-    candleBuy
+    (!higherTrendSell)
   ) {
     signal = "BUY";
-
     reason =
-      "EMA ঊর্ধ্বমুখী, MACD পজিটিভ, RSI অনুকূলে এবং ৫ মিনিটের ট্রেন্ড BUY-এর পক্ষে।";
+      "EMA ও MACD ঊর্ধ্বমুখী, RSI অনুকূলে এবং ক্যান্ডেল BUY-এর পক্ষে।";
   }
 
+  // আগের তুলনায় কিছুটা নমনীয় SELL শর্ত
   else if (
-    adx >= 18 &&
-    sellScore >= 8 &&
+    adx >= 14 &&
+    sellScore >= 6 &&
     sellScore - buyScore >= 2 &&
-    higherTrendSell &&
+    emaSell &&
+    macdSell &&
+    rsi >= 32 &&
+    rsi <= 50 &&
+    candleSell &&
     sellHasRoom &&
-    ema9 < ema21 &&
-    macd.histogram < 0 &&
-    rsi >= 35 &&
-    rsi <= 48 &&
-    candleSell
+    (!higherTrendBuy)
   ) {
     signal = "SELL";
-
     reason =
-      "EMA নিম্নমুখী, MACD নেগেটিভ, RSI অনুকূলে এবং ৫ মিনিটের ট্রেন্ড SELL-এর পক্ষে।";
+      "EMA ও MACD নিম্নমুখী, RSI অনুকূলে এবং ক্যান্ডেল SELL-এর পক্ষে।";
   }
 
   return {
@@ -593,7 +480,6 @@ function analyzeCandles(pair, candles) {
       atr: Number(atr.toFixed(6)),
       support: Number(support.toFixed(6)),
       resistance: Number(resistance.toFixed(6)),
-
       fiveMinuteTrend: higherTrendBuy
         ? "UP"
         : higherTrendSell
@@ -612,8 +498,6 @@ function analyzeCandles(pair, candles) {
 // -----------------------------
 
 async function scanPair(pair) {
-
-  // বাদ দেওয়া মার্কেট আর স্ক্যান হবে না।
   if (pair === excludedPair) {
     return {
       pair,
@@ -621,41 +505,30 @@ async function scanPair(pair) {
       signal: "WAIT",
       technicalScore: null,
       dataStatus: "PAYOUT_BLOCKED",
-      reason:
-        "এই মার্কেটটি বাদ দেওয়া হয়েছে। Reset না করা পর্যন্ত আসবে না।"
+      reason: "এই মার্কেটটি বাদ দেওয়া হয়েছে।"
     };
   }
 
   const payout = getPayout(pair);
 
-  if (payout === null) {
-    return {
-      pair,
-      payout: null,
-      signal: "WAIT",
-      technicalScore: null,
-      dataStatus: "PAYOUT_UNKNOWN",
-      reason:
-        "এই পেয়ারের প্রকৃত Payout যাচাই করা হয়নি।"
-    };
-  }
-
-  if (payout < MIN_PAYOUT) {
+  // গুরুত্বপূর্ণ পরিবর্তন:
+  // Payout অজানা হলেও মার্কেটের ডাটা বিশ্লেষণ হবে।
+  if (payout !== null && payout < MIN_PAYOUT) {
     return {
       pair,
       payout,
       signal: "WAIT",
       technicalScore: null,
       dataStatus: "PAYOUT_BLOCKED",
-      reason: "Payout ৭০%-এর নিচে, তাই পেয়ার বাদ।"
+      reason: "Payout ৭০%-এর নিচে।"
     };
   }
 
   const candles = await getMarketData(pair);
-
   const analysis = analyzeCandles(pair, candles);
 
   analysis.payout = payout;
+  analysis.payoutRequired = payout === null;
 
   return analysis;
 }
@@ -669,7 +542,7 @@ app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
     message: "Auto Best Market Signal Engine running",
-    twelveDataConfigured: Boolean(TWELVE_DATA_API_KEY),
+    twelveDataConfigured: Boolean(API_KEY),
     analysisEngine: "Rule-Based JavaScript",
     aiApiUsed: false,
     pairs: PAIRS,
@@ -708,12 +581,10 @@ app.post("/api/payout", (req, res) => {
   ) {
     return res.status(400).json({
       success: false,
-      message: "০ থেকে ১০০-এর মধ্যে সঠিক Payout লিখুন।"
+      message: "০ থেকে ১০০-এর মধ্যে Payout লিখুন।"
     });
   }
 
-  // আগে থেকেই অন্য একটি মার্কেট বাদ থাকলে
-  // দ্বিতীয় মার্কেট বাদ দেওয়া যাবে না।
   if (
     value < MIN_PAYOUT &&
     excludedPair &&
@@ -721,18 +592,15 @@ app.post("/api/payout", (req, res) => {
   ) {
     return res.status(409).json({
       success: false,
-      message:
-        "ইতিমধ্যে একটি মার্কেট বাদ আছে। নতুন মার্কেট বাদ দিতে হলে আগে Reset করুন।",
+      message: "একটি মার্কেট আগে থেকেই বাদ আছে। আগে Reset করুন।",
       excludedPair
     });
   }
 
-  // বাদ দেওয়া মার্কেট Reset ছাড়া ফিরবে না।
   if (excludedPair === pair && value >= MIN_PAYOUT) {
     return res.status(409).json({
       success: false,
-      message:
-        "এই মার্কেটটি বাদ দেওয়া আছে। ফিরিয়ে আনতে RESET MARKETS চাপুন।",
+      message: "এই মার্কেট ফিরিয়ে আনতে RESET MARKETS চাপুন।",
       excludedPair
     });
   }
@@ -744,7 +612,6 @@ app.post("/api/payout", (req, res) => {
   }
 
   cache.delete(pair);
-
   lastScan = null;
 
   res.json({
@@ -755,7 +622,7 @@ app.post("/api/payout", (req, res) => {
     minimumPayout: MIN_PAYOUT,
     message: value < MIN_PAYOUT
       ? `${pair} বাদ দেওয়া হয়েছে। অন্য মার্কেট খোঁজা হবে।`
-      : `${pair} Payout সংরক্ষণ হয়েছে।`
+      : `${pair} এর Payout সংরক্ষণ হয়েছে।`
   });
 });
 
@@ -767,7 +634,6 @@ app.post("/api/payout", (req, res) => {
 app.post("/api/reset-markets", (req, res) => {
   excludedPair = null;
 
-  // Reset-এর পর সব Payout আবার যাচাই করতে হবে।
   for (const pair of PAIRS) {
     PAYOUTS[pair] = null;
     cache.delete(pair);
@@ -777,8 +643,7 @@ app.post("/api/reset-markets", (req, res) => {
 
   res.json({
     success: true,
-    message:
-      "সব মার্কেট আবার চালু হয়েছে। Payout পুনরায় যাচাই করুন।",
+    message: "সব মার্কেট আবার চালু হয়েছে।",
     excludedPair: null,
     payouts: PAYOUTS
   });
@@ -786,19 +651,18 @@ app.post("/api/reset-markets", (req, res) => {
 
 
 // -----------------------------
-// SCAN ALL SIX PAIRS
+// SCAN ALL MARKETS
 // -----------------------------
 
 app.get("/api/scan", async (req, res) => {
   if (scanInProgress) {
     return res.status(429).json({
       success: false,
-      message:
-        "আগের স্ক্যানটি এখনো চলছে। একটু অপেক্ষা করুন।"
+      message: "আগের স্ক্যান চলছে। একটু অপেক্ষা করুন।"
     });
   }
 
-  if (!TWELVE_DATA_API_KEY) {
+  if (!API_KEY) {
     return res.status(500).json({
       success: false,
       message: "Twelve Data API Key সেট করা নেই।"
@@ -814,47 +678,34 @@ app.get("/api/scan", async (req, res) => {
     for (const pair of PAIRS) {
       try {
         const result = await scanPair(pair);
-
         results.push(result);
-
       } catch (error) {
-        if (error.status === 429) {
-          rateLimited = true;
-        }
+        if (error.status === 429) rateLimited = true;
 
         results.push({
           pair,
           signal: "WAIT",
           technicalScore: null,
-
           dataStatus: error.status === 429
             ? "RATE_LIMITED"
             : "ERROR",
-
-          reason:
-            error.message ||
-            "ডাটা বিশ্লেষণ করা যায়নি।"
+          reason: error.message || "মার্কেট বিশ্লেষণ করা যায়নি।"
         });
 
-        if (rateLimited) {
-          break;
-        }
+        if (rateLimited) break;
       }
     }
 
-    const checkedPairs = new Set(
-      results.map(r => r.pair)
-    );
+    const checked = new Set(results.map(r => r.pair));
 
     for (const pair of PAIRS) {
-      if (!checkedPairs.has(pair)) {
+      if (!checked.has(pair)) {
         results.push({
           pair,
           signal: "WAIT",
           technicalScore: null,
           dataStatus: "NOT_CHECKED",
-          reason:
-            "API সীমার কারণে এই পেয়ার পরীক্ষা করা যায়নি।"
+          reason: "API সীমার কারণে পরীক্ষা করা যায়নি।"
         });
       }
     }
@@ -875,8 +726,7 @@ app.get("/api/scan", async (req, res) => {
         b.indicators.adx - a.indicators.adx
       );
 
-    const selected =
-      candidates.length > 0 ? candidates[0] : null;
+    const selected = candidates.length ? candidates[0] : null;
 
     lastScan = {
       success: true,
@@ -889,19 +739,18 @@ app.get("/api/scan", async (req, res) => {
       scanTime: new Date().toISOString(),
 
       message: selected
-        ? "সেরা উপযুক্ত সিগন্যাল পাওয়া গেছে।"
-        : "এখন উপযুক্ত সিগন্যাল নেই। WAIT করুন।"
+        ? selected.payoutRequired
+          ? "সেরা সেটআপ পাওয়া গেছে। এবার এই মার্কেটের Payout লিখুন।"
+          : "সেরা উপযুক্ত সিগন্যাল পাওয়া গেছে।"
+        : "এখন উপযুক্ত সেটআপ নেই। WAIT করুন।"
     };
 
     res.json(lastScan);
-
   } catch (error) {
     res.status(500).json({
       success: false,
-      message:
-        error.message || "স্ক্যান ব্যর্থ হয়েছে।"
+      message: error.message || "স্ক্যান ব্যর্থ হয়েছে।"
     });
-
   } finally {
     scanInProgress = false;
   }
@@ -909,7 +758,7 @@ app.get("/api/scan", async (req, res) => {
 
 
 // -----------------------------
-// ANALYZE ONE SELECTED PAIR
+// ANALYZE SELECTED MARKET
 // -----------------------------
 
 app.get("/api/analyze", async (req, res) => {
@@ -925,39 +774,43 @@ app.get("/api/analyze", async (req, res) => {
   if (pair === excludedPair) {
     return res.status(403).json({
       success: false,
-      message:
-        "এই মার্কেটটি বাদ দেওয়া হয়েছে। Reset না করা পর্যন্ত ব্যবহার করা যাবে না।"
+      message: "এই মার্কেটটি বাদ দেওয়া হয়েছে।"
     });
   }
 
   const payout = getPayout(pair);
 
-  if (payout === null || payout < MIN_PAYOUT) {
+  if (payout === null) {
     return res.status(403).json({
       success: false,
-      message:
-        "এই পেয়ারের প্রকৃত Payout ৭০% বা তার বেশি নয়।",
+      message: "এই মার্কেটের Payout আগে লিখুন।",
+      payoutRequired: true
+    });
+  }
+
+  if (payout < MIN_PAYOUT) {
+    return res.status(403).json({
+      success: false,
+      message: "Payout ৭০%-এর নিচে।",
       payout
     });
   }
 
   try {
     const candles = await getMarketData(pair, true);
-
     const result = analyzeCandles(pair, candles);
 
     result.payout = payout;
+    result.payoutRequired = false;
 
     res.json({
       success: true,
       result
     });
-
   } catch (error) {
     res.status(500).json({
       success: false,
-      message:
-        error.message || "বিশ্লেষণ করা যায়নি।"
+      message: error.message || "বিশ্লেষণ করা যায়নি।"
     });
   }
 });
@@ -968,9 +821,11 @@ app.get("/api/analyze", async (req, res) => {
 // -----------------------------
 
 app.get("/api/last-scan", (req, res) => {
-  res.json({
+  res.json(lastScan || {
     success: true,
-    scan: lastScan
+    selected: null,
+    results: [],
+    message: "এখনো কোনো স্ক্যান করা হয়নি।"
   });
 });
 
@@ -980,7 +835,5 @@ app.get("/api/last-scan", (req, res) => {
 // -----------------------------
 
 app.listen(PORT, () => {
-  console.log(
-    `Auto Best Market Signal running on port ${PORT}`
-  );
+  console.log(`Auto Best Market Signal running on port ${PORT}`);
 });
